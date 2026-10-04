@@ -1,0 +1,7 @@
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.npz binary
+*.npy binary
+*.bam binary
+*.png binary
+*.wav binary

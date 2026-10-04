@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.venv/
+selftest.png
+shot_*.png
+# recorded at runtime
+assets/ghosts/*_user*.npz

@@ -945,6 +945,17 @@ class Game:
         f = min(1.0, (t - self._T_out) / config.START_GANTRY_RISE)
         return 0.95 * (f * f)                            # ease-in, lifting away
 
+    def _follow_field_shadow(self):
+        """The other cars' shadow map: round the car on camera, pushed ahead
+        along the view."""
+        if self.gp is None:
+            return
+        followed = (self.gp.cars[self._watch_idx]
+                    if self._watch_idx is not None and self._spectating()
+                    else self.car)
+        f = camera.forward
+        self.light.field_shadow.follow(followed.world_position, (f.x, f.z))
+
     # -- main loop ------------------------------------------------
     def update(self):
         # The loading card built the HUD dark; bring it up now, with the lights.
@@ -958,6 +969,11 @@ class Game:
             # shot of a circuit nobody has driven yet is furniture.
             self.hud.root.enabled = False
             self.intro.update(dt)
+            # The cars stand on the grid already: their shadow cameras go
+            # there too, not to the world origin (the start line) they were
+            # built at.
+            self.light.follow(self.car)
+            self._follow_field_shadow()
             self.sound.update(0.0, config.MAX_SPEED, 0.0, dt, muted=True)
             if self.intro.done:
                 self.state = COUNTDOWN
@@ -1056,14 +1072,7 @@ class Game:
             self.freecam.update(dt)
         else:
             self._update_camera(dt)
-        if self.gp is not None:
-            # The other cars' shadow map: round the car on camera, pushed
-            # ahead along the view.
-            followed = (self.gp.cars[self._watch_idx]
-                        if self._watch_idx is not None and self._spectating()
-                        else self.car)
-            f = camera.forward
-            self.light.field_shadow.follow(followed.world_position, (f.x, f.z))
+        self._follow_field_shadow()
         # Spectating means watching a car, and a car you are behind sounds
         # like itself, not like the one you left on the other side of the
         # circuit.
@@ -1406,7 +1415,8 @@ class Game:
             return cur[1], cur[2], head
         self._rc_spend(False)
         if yellow:
-            return "YELLOW FLAG  ·  SLOW DOWN  ·  NO OVERTAKES", "warn", "RACE CONTROL"
+            return (f"YELLOW FLAG  ·  KEEP BELOW {config.YELLOW_SPEED_KMH:.0f} KM/H"
+                    "  ·  NO OVERTAKES", "warn", "RACE CONTROL")
         return "", "warn", "RACE CONTROL"
 
     def _yellow_here(self) -> bool:
@@ -1777,6 +1787,8 @@ TRANSITION = None
 
 def update():
     global TRANSITION
+    from .recorder import RECORDER
+    RECORDER.tick()
     if TRANSITION is not None:
         TRANSITION.tick()
         if TRANSITION.done:
@@ -1791,6 +1803,10 @@ def input(key):  # noqa: A001  (ursina hook name)
     if key == "f11":
         # Everywhere, the menu and the loading card included.
         toggle_fullscreen()
+        return
+    if key == config.REC_KEY:
+        from .recorder import RECORDER
+        RECORDER.toggle()
         return
     # The menu and the race are never both up, so one hook can serve both.
     if TRANSITION is not None:

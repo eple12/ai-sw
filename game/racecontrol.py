@@ -30,6 +30,17 @@ moment they happen:
   faster than the other was moving across into it -- its fault. Otherwise,
   a racing incident.
 
+Before that, a contact nobody could have avoided is let go -- a racing
+incident whoever the geometry points at (the player is told which kind):
+
+* **No time to react.** The other car had spun, left the road, stopped or been
+  recovered less than ``UNAVOIDABLE_T`` seconds before: a car arriving at
+  racing speed cannot do anything about that.
+* **Pushed in.** The guilty car had been hit by a *third* car less than
+  ``CHAIN_T`` seconds earlier: it was a passenger, not a driver.
+* **Rejoining.** The other car was off the road when they touched: the car on
+  the road had the right of way.
+
 What the guilty car gets depends on what it did to the other one: if the
 victim spun, went off or needed recovering within ``CONSEQUENCE_T`` seconds,
 or the hit was heavy, a 5 s penalty; a light touch with no consequence is a
@@ -43,11 +54,12 @@ Yellow flags (a stricken car: stopped, or being recovered):
 * **No overtaking** in the yellow zone, bar the stricken car itself. The
   car that passed is told to give the place back; if it has within
   ``GIVE_BACK_T``, nothing more, otherwise ``YELLOW_PEN``.
-* **Slow down.** Through the zone a car must run clearly slower than it did
-  at the same place on its previous lap (``YELLOW_SLOW_RATIO`` of that
-  speed, on average over the zone). The first time is a warning; a repeat
-  costs ``YELLOW_PEN`` on levels that penalise repeats. With no previous
-  lap to compare against (lap 1) there is nothing to judge on.
+* **Slow down.** Through the zone a car stays below ``config.YELLOW_SPEED_KMH``.
+  It has ``YELLOW_GRACE_T`` seconds from entering the zone to get down to it
+  (nobody brakes from 300 km/h in a car's length); after that, more than
+  ``YELLOW_OVER_T`` seconds above the limit (``YELLOW_TOL`` of tolerance) is
+  failing to slow. The first time is a warning; a repeat costs ``YELLOW_PEN``
+  on levels that penalise repeats.
 
 Time penalties are added to the race time at the flag, as in F1 when there is
 no pit stop to serve them at.
@@ -90,8 +102,15 @@ COLLISION_PEN = 5.0
 #: over its own on the lap before -- judged on at least YELLOW_MIN_T in it.
 GIVE_BACK_T = 10.0
 YELLOW_PEN = 5.0
-YELLOW_SLOW_RATIO = 0.96
 YELLOW_MIN_T = 1.5
+YELLOW_GRACE_T = 3.0
+YELLOW_TOL = 1.05
+YELLOW_OVER_T = 1.0
+#: Contacts nobody could have avoided (see the module doc): seconds a car must
+#: have been in trouble before running into it counts as the other driver's
+#: fault, and seconds after a hit by a third car in which a second one is not.
+UNAVOIDABLE_T = 1.5
+CHAIN_T = 1.0
 
 
 @dataclass
@@ -190,6 +209,8 @@ class RaceControl:
         before it: speed along the track ``v_along``, across it ``v_across``
         (+ = right). ``gap`` is how far b's centre is ahead of a's along the
         lap, ``lat`` how far right of a it is."""
+        prior = {c: (self.cars[c].last_contact, self.cars[c].last_contact_with)
+                 for c in (a, b)}
         for c, o in ((a, b), (b, a)):
             self.cars[c].last_contact = t
             self.cars[c].last_contact_with = o
@@ -207,7 +228,28 @@ class RaceControl:
                                          "NO FURTHER ACTION", "clear", b))
             return
         victim = b if fault == a else a
+        why = self._unavoidable(t, fault, victim, sa if fault == a else sb,
+                                sb if fault == a else sa, prior[fault])
+        if why:
+            self.messages.append(Message(t, a, f"CONTACT  ·  {why}  ·  RACING INCIDENT  ·  "
+                                         "NO FURTHER ACTION", "clear", b))
+            return
         self._pending.append(_Pending(t, fault, victim, impulse, reason))
+
+    @staticmethod
+    def _unavoidable(t: float, fault: int, other: int, s_fault: dict,
+                     s_other: dict, prior: tuple) -> str:
+        """Why a contact the geometry blames on *fault* was not avoidable
+        ('' if it was). *prior* is the guilty car's previous (time, with whom)
+        contact, from before this one."""
+        if s_other.get("trouble_age", math.inf) < UNAVOIDABLE_T:
+            return "NO TIME TO REACT"
+        t_prev, with_prev = prior
+        if t - t_prev < CHAIN_T and with_prev not in (other, -1):
+            return "PUSHED INTO IT"
+        if s_other.get("off_track", False) and not s_fault.get("off_track", False):
+            return "OTHER CAR REJOINING"
+        return ""
 
     @staticmethod
     def _fault(a, b, sa, sb, gap, lat) -> tuple[int, str]:
@@ -236,10 +278,10 @@ class RaceControl:
         self.messages.append(Message(t, passer, "OVERTAKING UNDER YELLOW  ·  "
                                      "GIVE THE PLACE BACK", "warn", passed))
 
-    def yellow_slow(self, t: float, car: int, ratio: float, secs: float) -> None:
-        """*car* has left a yellow zone after *secs* in it at *ratio* of its
-        previous lap's speed there, on average."""
-        if secs < YELLOW_MIN_T or ratio <= YELLOW_SLOW_RATIO:
+    def yellow_slow(self, t: float, car: int, over: float, secs: float) -> None:
+        """*car* has left a yellow zone after *secs* in it, of which *over*
+        seconds (after the grace to get down to the limit) were above it."""
+        if secs < YELLOW_MIN_T or over < YELLOW_OVER_T:
             return
         rec = self.cars[car]
         rec.yellow_warnings += 1

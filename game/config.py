@@ -849,10 +849,17 @@ GHOST_ENABLED = True
 # and picked by name alone, so switching is a one-line edit here:
 #   "bl_red" / "bl_white"           the Blender car        (assets/models/f1)
 #   "rb_red" / "rb_white"           the baked fp04rb asset (assets/models/f1)
+#   "rc_red" / "rc_white"           assets/for+race.blend as modelled, 894k tris
+#   "rl_red" / "rl_white"           the same, decimated to 91k tris
 #   "f1red" / "f1white"             procedural, f1car.py
 #   "raceCarRed" / "raceCarWhite"   Kenney CC0 kit         (assets/models/kenney)
-PLAYER_MODEL = "bl_red"
-GHOST_MODEL = "bl_white"
+# rc_/rl_ are built by blender/export_race_car.py + tools/build_blender_race.py,
+# fitted to the same 4.45 x 2.41 m box as bl_. 1080p, twenty-car grand prix on
+# the dev laptop, back to back: bl_ 72 fps, rl_ 66 (at 160k tris: 61 against bl_'s
+# 80); rc_ 27 (qualifying, two cars: 95 / 84 / 69). rl_ is indistinguishable
+# from rc_ under the game's lighting.
+PLAYER_MODEL = "rl_red"
+GHOST_MODEL = "rl_white"
 # Fraction of the tyre's grip the AI commits to. This is the difficulty dial,
 # and it is a physical quantity rather than a fudge factor: the planner works
 # out a corner speed from the friction circle, and this says how much of the
@@ -889,7 +896,23 @@ GP_LAP_VARIATION = 0.015
 # The twenty-car field (fieldproc.py) on circuits that have solved plans;
 # False races the single AI ghost everywhere, as before.
 GP_FIELD = True
+# Who decides the AI drivers' passing, defending and queueing: "rules"
+# (racecraft's hand-written layer) or "rl" (the policy trained by
+# tools/ppo_raceai.py and kept in assets/policies/raceai.npz -- the rules, if
+# that file is not there). The plan following, the room rule, yellow flags and
+# recovery are the rules' either way. See README, "레이스 AI의 학습 판단 층".
+RACE_AI = "rl"
+RACE_AI_POLICY = ASSET_DIR / "policies" / "raceai.npz"
+# Who steers and works the pedals: "rl" (the network of game/drivenet.py, weights
+# in assets/policies/drivenet.npz -- the follower, if that file is not there) or
+# "rules" (mintime_driver.PlanFollower, the hand-built tracker).
+DRIVE_AI = "rules"
+DRIVE_AI_POLICY = ASSET_DIR / "policies" / "drivenet.npz"
 # Seconds a race control message about the player stays up (others: 60%).
+# Under a yellow flag every car, the player's included, keeps below this speed
+# for the stretch the flag covers (racecontrol.py judges it, racecraft.py drives
+# to it, and the HUD says it).
+YELLOW_SPEED_KMH = 100.0
 RC_MESSAGE_T = 4.0
 # Race control's messages queue and take turns: never less than this on
 # screen however many are waiting, and news of other cars that has waited
@@ -998,8 +1021,10 @@ CAM_FRAME_LOCK = 1.0
 CAM_FRAME_SCALE = (0.85, 1.35)
 
 # Horizontal degrees (Ursina's camera.fov is the horizontal angle): opens
-# from 60 to 132 flat out. (62 -> 78 and 62 -> 92 were tried on 2026-10-04
-# and both put back: this is the rush of speed the game is meant to have.)
+# from 60 to 132 flat out. (62 -> 78 and 62 -> 92 were tried on 2026-10-04, and
+# 60 -> 96 with a heavier POST_SPEED_BLUR on 2026-10-05, to stop cars reading as
+# squashed; all put back: this is the rush of speed the game is meant to have.
+# The squashed look was the car model's proportions, fixed in the model.)
 CAM_FOV_BASE = 60.0
 CAM_FOV_GAIN = 72.0            # added at MAX_SPEED (-> 132 deg flat out)
 
@@ -1583,4 +1608,16 @@ MINIMAP_POINTS = 180           # centreline samples drawn in the HUD minimap
 
 WINDOW_SIZE = (1280, 720)
 FULLSCREEN = False
+
+# --- recording (recorder.py) -----------------------------------------------------
+# F9 starts and stops a screen recording of the game window: ffmpeg's desktop
+# capture into the GPU's H.264 encoder, so the game itself does no work for it.
+# The REC marker (top right) is part of the picture; turn it off for a clean
+# video if you will remember that you are recording.
+REC_KEY = "f9"
+REC_FPS = 60
+REC_BITRATE_MBPS = 30.0        # 1080p60 of this game: ~220 MB a minute
+REC_INDICATOR = True
+REC_DIR = None                 # default: Videos\FORMULA-AI
+REC_FFMPEG = ""                # default: ffmpeg on PATH, else Program Files/ffmpeg
 PHYSICS_HZ = 120

@@ -25,7 +25,7 @@ import numpy as np
 
 from . import config
 from .contact import HIT_IMPULSE, collide, overlap
-from .racecontrol import Message, RaceControl
+from .racecontrol import YELLOW_GRACE_T, YELLOW_TOL, Message, RaceControl
 from .racecraft import CarView, RaceDriver, TrackFrame
 from .rules import TrackLimits
 from .surface import Surface
@@ -128,7 +128,8 @@ class Entrant:
     ref_v: float = float("nan")
     #: In a yellow zone now: seconds in it, and speed-over-last-lap seconds.
     y_t: float = 0.0
-    y_sum: float = 0.0
+    #: ...and how much of that was above the limit, after the grace.
+    y_over: float = 0.0
 
     @property
     def best(self):
@@ -165,6 +166,10 @@ class Field:
         #: ("hit", t, s, a, b, impulse, state a, state b, b's lead on a,
         #: b's offset right of a), recoveries as ("recover", t, s, car, why).
         self.events: list = []
+        #: Car -> session time it began being in trouble (spun, off the road,
+        #: being recovered); absent while it is not. For the stewards' idea of
+        #: a contact nobody could have avoided (racecontrol.UNAVOIDABLE_T).
+        self._trouble_since: dict[int, float] = {}
 
     # -- the start ------------------------------------------------------
     def grid(self):
@@ -338,17 +343,24 @@ class Field:
                 g, l = float(gap[a, b]), float(lat[a, b])
                 self.events.append(("hit", self.t, views[a].s, a, b, j,
                                     self._state(a), self._state(b), g, l))
-                sa = self._motion(views[a], before[0][1])
-                sb = self._motion(views[b], before[1][1])
+                sa = self._motion(views[a], before[0][1], a)
+                sb = self._motion(views[b], before[1][1], b)
                 self.rc.contact(self.t, a, b, j, sa, sb, g, l)
 
-    def _motion(self, view, vel) -> dict:
-        """A velocity along and across the track where a car is."""
+    def _motion(self, view, vel, c: int) -> dict:
+        """A velocity along and across the track where a car is, and how long
+        it has been in trouble (inf: not), for the stewards."""
         k = self.frame.node(view.s)
         tx, tz = self.frame._tan_l[k]
         vx, vz = float(vel[0]), float(vel[1])
+        since = self._trouble_since.get(c)
+        age = self.t - since if since is not None else math.inf
+        crawl = self.cars[c].slow_t
+        if crawl > 0.0:
+            age = min(age, crawl)            # stopped on the road, not yet a yellow
         # The track's normal points right of its tangent: (tz, -tx).
-        return {"v_along": vx * tx + vz * tz, "v_across": vx * tz - vz * tx}
+        return {"v_along": vx * tx + vz * tz, "v_across": vx * tz - vz * tx,
+                "trouble_age": age, "off_track": not self.cars[c].vehicle.on_track}
 
     def _state(self, c: int) -> str:
         d = self.cars[c].driver
@@ -389,7 +401,7 @@ class Field:
         what = ("RECOVERING" if e.driver is not None and e.driver.mode == "recover"
                 else "STOPPED ON TRACK")
         self.rc.messages.append(Message(
-            self.t, e.idx, f"YELLOW SECTOR {sector}  ·  {e.tla} {what}  ·  SLOW DOWN  ·  NO OVERTAKES",
+            self.t, e.idx, f"YELLOW SECTOR {sector}  ·  {e.tla} {what}  ·  MAX {config.YELLOW_SPEED_KMH:.0f} KM/H  ·  NO OVERTAKES",
             "yellow"))
 
     def _yellow(self, views, dt: float):
@@ -429,20 +441,17 @@ class Field:
         self.frame.stricken_s = tuple((b - YELLOW_AFTER) % L for _a, b in zones)
         # Slowing for it: each car's speed through a zone against its own
         # at the same places on its lap before, judged as it leaves.
+        limit = config.YELLOW_SPEED_KMH / 3.6
         for e, me in zip(self.cars, views):
             inside = (bool(zones) and e.finish_t is None and not self._stricken(e)
                       and self.rc.yellow_at(me.s, L))
             if inside:
-                if math.isfinite(e.ref_v) and e.ref_v > 5.0:
-                    # Against its last clean lap here -- but never one slower
-                    # than most of what the plan allows (a standing start, a
-                    # lap in traffic): that would pass anything.
-                    ref = max(e.ref_v, 0.8 * float(self._ref_v[self.frame.node(me.s)]))
-                    e.y_t += dt
-                    e.y_sum += dt * me.v / ref
+                e.y_t += dt
+                if e.y_t > YELLOW_GRACE_T and me.v > limit * YELLOW_TOL:
+                    e.y_over += dt
             elif e.y_t > 0.0:
-                self.rc.yellow_slow(self.t, e.idx, e.y_sum / e.y_t, e.y_t)
-                e.y_t = e.y_sum = 0.0
+                self.rc.yellow_slow(self.t, e.idx, e.y_over, e.y_t)
+                e.y_t = e.y_over = 0.0
 
     # -- one physics tick --------------------------------------------------
     def step(self, dt: float):
@@ -489,6 +498,11 @@ class Field:
         self._yellow(views, dt)
         self.rc.opening = max(e.laps for e in self.cars) == 0
         self._trouble_now = self._trouble(views)
+        for c, bad in enumerate(self._trouble_now):
+            if not bad:
+                self._trouble_since.pop(c, None)
+            else:
+                self._trouble_since.setdefault(c, self.t)
         self.rc.update(self.t, self._trouble_now,
                        [e.limits.progress if e.limits.progress is not None
                         else -1e9 for e in self.cars])

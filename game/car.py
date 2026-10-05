@@ -8,6 +8,8 @@ Four sources are supported, picked by the model *name* alone (config.PLAYER_MODE
   under ``assets/models/f1``.
 * ``rb_red`` / ``rb_white`` -- the supplied fp04rb asset, baked the same way by
   ``tools/build_f1_asset.py``.
+* ``rc_*`` / ``rl_*`` -- ``assets/for+race.blend`` (full / decimated), baked by
+  ``blender/export_race_car.py`` and ``tools/build_blender_race.py``.
 * ``f1red`` / ``f1white`` -- built from primitives at runtime by ``f1car.py``.
 * anything else -- a .glb from the Kenney Racing Kit, CC0
   (``assets/models/kenney``, see its LICENSE.txt), through ``panda3d-gltf``.
@@ -163,7 +165,6 @@ class Car(Entity):
         self.wheels = self._rig_wheels()
         self._radius = self._wheel_radius()
 
-        self.helmet = self._add_driver()
         # Not a shadow -- the sun casts the real one (lighting.py) -- but the
         # occlusion under the floor that no shadow map draws.
         self.contact = self._add_contact_shadow()
@@ -258,7 +259,9 @@ class Car(Entity):
 
         from .shaders import material
 
-        liv = self.LIVERY.get(model, self.LIVERY["bl_red"])
+        # the baked cars share their colourway by suffix: rc_white, rl_white...
+        liv = self.LIVERY.get(model) or self.LIVERY.get(
+            "bl_" + model.rpartition("_")[2], self.LIVERY["bl_red"])
         if livery is not None:
             # A team's colours, (r, g, b) 0..1: the paint itself as well.
             a, b, c = livery
@@ -317,18 +320,6 @@ class Car(Entity):
             else:
                 mat = material(0.28, 3.0, 0.0)          # machined metal
             gn.set_shader_input("material", mat)
-        if self.helmet is not None:
-            self.helmet.set_shader_input("part", 5.0)
-            self.helmet.set_shader_input("material", material(0.22, 1.0, 1.0))
-
-    def _add_driver(self):
-        """A helmet in the cockpit. An empty tub is the first thing that
-        gives a car away as a model, from the chase camera above all, which
-        looks straight down into it."""
-        if not getattr(self.body, "faces_forward", False):
-            return None
-        return Entity(parent=self.hull, model="sphere", name="helmet",
-                      scale=(0.25, 0.27, 0.29), position=(0.0, 0.645, -0.10))
 
     def _add_contact_shadow(self):
         """Ambient occlusion under the car: the soft darkening where the

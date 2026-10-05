@@ -128,11 +128,15 @@ class GPCars:
             if tm is not None:
                 livery = (tm.color, tm.secondary, tm.accent)
             car.apply_materials(config.PLAYER_MODEL, livery=livery)
-            car.lod = self._flat_copy(car)
+            car.lod = self._flat_copy(car, config.PLAYER_MODEL)
             # The sun's shadow: a merged stand-in in the field's own map,
             # posed from this car every frame (the hero car's map is the
             # player's alone).
             self.shadows.add(idx, car.lod)
+            # On the grid from the start: until the first snapshot (the intro
+            # film runs before there is one) the stand-in would sit at the
+            # origin, which is the start line.
+            self.shadows.pose(idx, car)
             self.cars[idx] = car
             self.proxies[idx] = v
             self._ghost[idx] = False
@@ -150,28 +154,51 @@ class GPCars:
     PARTS = ("Livery", "Carbon", "Rubber", "Metal", "Interior")
 
     @classmethod
-    def _flat_copy(cls, car):
-        """The car's body and wheels copied in their rest pose and merged by
-        material -- all the rubber in one mesh, all the metal in another --
-        under one node per material that carries the material's inputs, so
-        the parts beneath share a state and flatten into a single draw.
-        Hidden until the car is far enough away."""
-        from panda3d.core import NodePath
+    def _flat_copy(cls, car, model: str):
+        """The car's far stand-in: its parts merged by material -- all the
+        rubber in one mesh, all the metal in another -- under one node per
+        material that carries the material's inputs, so the parts beneath share
+        a state and flatten into a single draw. Hidden until the car is far
+        enough away.
+
+        The geometry is the model's own ``<model>_lod.bam`` when there is one
+        (a car seen from 30 m or more has no use for 91k triangles; the baked
+        stand-in has 17k), else a copy of the car itself in its rest pose.
+        """
+        import builtins
+        from pathlib import Path
+
+        from panda3d.core import Filename, NodePath
+
+        from .car import F1_DIR
+        src, src_root = car, car
+        lod_path = Path(F1_DIR) / f"{model}_lod.bam"
+        if lod_path.is_file():
+            src_root = builtins.base.loader.load_model(
+                Filename.from_os_specific(str(lod_path.resolve())))
+            src = src_root
+        # Each material's shader inputs, as Car.apply_materials set them on the
+        # car's own parts.
+        inputs = {}
+        for gn in car.find_all_matches("**/+GeomNode"):
+            key = next((k for k in cls.PARTS if k in gn.get_name()), None)
+            if key is not None and key not in inputs:
+                inputs[key] = tuple(gn.get_shader_input(i)
+                                    for i in ("part", "material"))
         lod = NodePath("lod")
         groups = {}
-        for gn in car.find_all_matches("**/+GeomNode"):
-            name = gn.get_name()
-            key = next((k for k in cls.PARTS if k in name), None)
-            if key is None:
-                continue                      # the helmet, the contact shadow
+        for gn in src.find_all_matches("**/+GeomNode"):
+            key = next((k for k in cls.PARTS if k in gn.get_name()), None)
+            if key is None or key not in inputs:
+                continue                      # the contact shadow
             grp = groups.get(key)
             if grp is None:
                 grp = groups[key] = lod.attach_new_node(key)
-                for inp in ("part", "material"):
-                    grp.set_shader_input(gn.get_shader_input(inp))
+                for inp in inputs[key]:
+                    grp.set_shader_input(inp)
             c = NodePath(gn.node().make_copy())
             c.reparent_to(grp)
-            c.set_transform(gn.get_transform(car))
+            c.set_transform(gn.get_transform(src_root))
             c.clear_shader_input("part")
             c.clear_shader_input("material")
             for key_ in list(c.node().get_python_tag_keys()):
@@ -179,6 +206,8 @@ class GPCars:
         lod.flatten_strong()
         lod.reparent_to(car)
         lod.hide()
+        if src_root is not car:
+            src_root.remove_node()
         return lod
 
     # -- per frame -------------------------------------------------------

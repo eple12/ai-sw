@@ -133,7 +133,8 @@ def eval_episode(args):
     rep = raceenv.run(sc, raceai.Policy(w))
     return {"kind": kind, "circuit": circuit, "ok": bool(raceenv.success(kind, rep)),
             "hits": rep["ego_hits"], "pen": rep["ego_penalty_s"],
-            "passes": rep["passes_by_ego"], "rank": rep["ego_rank_end"]}
+            "passes": rep["passes_by_ego"], "rank": rep["ego_rank_end"],
+            "queue": rep["ego_queue_s"]}
 
 
 # --------------------------------------------------------------------------
@@ -158,7 +159,11 @@ def summarise_eval(res):
         hs = [r for r in rs if r["circuit"] in HOLDOUT]
         out["all"][kind] = float(np.mean([r["ok"] for r in rs])) if rs else float("nan")
         out["holdout"][kind] = float(np.mean([r["ok"] for r in hs])) if hs else float("nan")
-    out["score"] = float(np.mean(list(out["all"].values())))
+    # Held up behind a car with the road open beside is no good outcome even when
+    # nothing was hit: a second of it costs a hundredth of the score.
+    queue = float(np.mean([r["queue"] for r in res if r["kind"] in ("tow", "pack", "defend")] or [0]))
+    out["queue_s"] = queue
+    out["score"] = float(np.mean(list(out["all"].values()))) - 0.01 * queue
     out["score_holdout"] = float(np.mean(list(out["holdout"].values())))
     out["passes_tow"] = float(np.mean([r["passes"] for r in res if r["kind"] == "tow"] or [0]))
     return out

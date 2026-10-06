@@ -906,7 +906,7 @@ RACE_AI_POLICY = ASSET_DIR / "policies" / "raceai.npz"
 # Who steers and works the pedals: "rl" (the network of game/drivenet.py, weights
 # in assets/policies/drivenet.npz -- the follower, if that file is not there) or
 # "rules" (mintime_driver.PlanFollower, the hand-built tracker).
-DRIVE_AI = "rules"
+DRIVE_AI = "rl"
 DRIVE_AI_POLICY = ASSET_DIR / "policies" / "drivenet.npz"
 # Seconds a race control message about the player stays up (others: 60%).
 # Under a yellow flag every car, the player's included, keeps below this speed

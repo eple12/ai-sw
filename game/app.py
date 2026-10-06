@@ -8,7 +8,8 @@ import random
 import numpy as np
 from ursina import Ursina, Vec3, camera, held_keys, time, window
 
-from . import config, grandprix, teams
+from . import assist as assist_mod
+from . import config, grandprix, settings, teams
 from . import palette as pal
 from . import post
 from .car import Car, lerp_pose
@@ -170,6 +171,15 @@ class Game:
         else:
             self._hud_rows = 2
         self.hud = HUD(self.track, laps, mode, rows=self._hud_rows)
+        #: The player's assists (settings screen): auto steering / pedals and the
+        #: lane choice. None when neither is on, or the circuit has no plan.
+        self.assist = None
+        self._assist_txt = None
+        self._assist_hud = None
+        self._dt = 1.0 / 60.0
+        st = settings.current
+        if (st.auto_steer or st.auto_pedals) and not spectate and assist_mod.available(track_name):
+            self.assist = assist_mod.Assist(self.track, self.surface)
         #: Snapshot columns, and each AI car's dot colour on the map.
         self._C = SNAP_COLS
         self._dot_col = {}
@@ -714,8 +724,40 @@ class Game:
         down = held_keys["s"] or held_keys["down arrow"]
         steer = (held_keys["d"] or held_keys["right arrow"]) - \
                 (held_keys["a"] or held_keys["left arrow"])
-        return Controls(throttle=float(up), brake=float(down),
-                        steer=float(steer), handbrake=bool(held_keys["space"]))
+        ctl = Controls(throttle=float(up), brake=float(down),
+                       steer=float(steer), handbrake=bool(held_keys["space"]))
+        if self.assist is not None:
+            if self.assist.steer:
+                ctl.steer = 0.0                 # A / D choose the lane instead
+            cap = math.inf
+            if self.assist.pedals and self.gp is not None:
+                near = [v for i, v in self.gp.proxies.items()
+                        if i != self.field.player and not self.gp._ghost.get(i, False)]
+                cap = assist_mod.leader_cap(self.vehicle, near)
+            ctl = self.assist.controls(self.vehicle, ctl, self._dt, cap)
+            self._assist_text().text = self._assist_label()
+        return ctl
+
+    def _assist_text(self):
+        """The assist's line on the HUD; rebuilt with the HUD (a window resize
+        makes a new one)."""
+        if self._assist_txt is None or self._assist_hud is not self.hud:
+            from ursina import Text
+            from .ui import pick_font
+            self._assist_txt = Text("", parent=self.hud.root, font=pick_font(), scale=0.9,
+                                    color=pal.rgb(235, 235, 240), origin=(0, 0),
+                                    position=(0, -0.43, -0.2))
+            self._assist_hud = self.hud
+        return self._assist_txt
+
+    def _assist_label(self) -> str:
+        a = self.assist
+        parts = []
+        if a.steer:
+            parts.append(f"AUTO STEERING  ·  A / D  LANE  {a.lane_text}")
+        if a.pedals:
+            parts.append("AUTO PEDALS")
+        return "   ·   ".join(parts)
 
     def _cooldown_controls(self) -> Controls:
         """The autopilot drives the car from the flag onwards, and keeps going.
@@ -790,6 +832,13 @@ class Game:
             return
         if self.state == PAUSED and self._pause_key(key):
             return
+        if self.assist is not None and self.assist.steer and self.state == RACING:
+            if key in ("a", "left arrow"):
+                self.assist.step_lane(-1)
+                return
+            if key in ("d", "right arrow"):
+                self.assist.step_lane(1)
+                return
         if key == "c":
             self.cam_idx = (self.cam_idx + 1) % len(config.CAM_MODES)
             # The bonnet camera sits inside the car, which would clip messily
@@ -1014,6 +1063,7 @@ class Game:
                 self.session_time = 0.0
                 self.lap_start = 0.0
 
+        self._dt = dt
         ctl = self.read_controls()
         self._ctl = ctl
         scraped = False
@@ -1979,7 +2029,15 @@ def _show_modes():
     _set_menu(None)
     _set_menu(ModeMenu(on_pick=_pick_mode, on_quit=application.quit,
                        laps=SESSION["laps"], initial=SESSION["mode"],
-                       level=SESSION["level"], on_level=_set_level))
+                       level=SESSION["level"], on_level=_set_level,
+                       on_settings=lambda: _show_settings(_show_modes)))
+
+
+def _show_settings(back):
+    """The settings screen; ESC goes back to the screen it was opened from."""
+    from .menu import SettingsMenu
+    _set_menu(None)
+    _set_menu(SettingsMenu(on_back=back))
 
 
 def _set_level(level: int):
@@ -2011,7 +2069,8 @@ def _show_circuits():
         level=SESSION["level"],
         quali=SESSION["quali"],
         grid=SESSION["grid"],
-        on_grid=lambda g: SESSION.update(grid=g)))
+        on_grid=lambda g: SESSION.update(grid=g),
+        on_settings=lambda: _show_settings(_show_circuits)))
 
 
 def _build_menu(progress=None):
@@ -2054,6 +2113,7 @@ def main(argv=None):
     p.add_argument("--selftest", type=float, default=0.0,
                    help="run for N seconds with an autopilot, then quit")
     args = p.parse_args(argv)
+    settings.load()
 
     from . import frameloop
     frameloop.prepare()

@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import json
 import multiprocessing as mp
+import os
 import sys
 import time
 from concurrent.futures import ProcessPoolExecutor
@@ -47,9 +48,10 @@ DT = 1.0 / 60.0
 #: Reward (per second unless said otherwise).
 R_RECOVERY = 6.0          # each
 R_HIT = 2.0               # each
-R_OFF = 0.6
-R_KERB = 0.8              # two wheels or more beyond the white line
-R_KERB1 = 0.08            # any wheel
+R_OFF = float(os.environ.get("PD_R_OFF", 0.6))      # all four wheels beyond the white line
+# (the kerb terms can be set from the environment, which the spawned workers inherit)
+R_KERB = float(os.environ.get("PD_R_KERB", 0.8))     # two wheels or more beyond the white line
+R_KERB1 = float(os.environ.get("PD_R_KERB1", 0.08))  # any wheel
 R_ERR = 0.12              # per m^2 past a metre of line error
 R_SLOW = 0.025            # per m/s under the speed asked for
 R_FAST = 0.05             # per m/s over it
@@ -193,7 +195,16 @@ def main():
     ap.add_argument("--seed0", type=int, default=300000)
     ap.add_argument("--max-hours", type=float, default=0.0)
     ap.add_argument("--resume", action="store_true")
+    ap.add_argument("--r-kerb", type=float, default=None)
+    ap.add_argument("--r-kerb1", type=float, default=None)
+    ap.add_argument("--r-off", type=float, default=None)
     args = ap.parse_args()
+    if args.r_kerb is not None:
+        os.environ["PD_R_KERB"] = str(args.r_kerb)
+    if args.r_off is not None:
+        os.environ["PD_R_OFF"] = str(args.r_off)
+    if args.r_kerb1 is not None:
+        os.environ["PD_R_KERB1"] = str(args.r_kerb1)
 
     import torch
     import torch.nn as nn

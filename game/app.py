@@ -842,7 +842,7 @@ class Game:
             pass                              # one car to watch: nothing to cycle
         elif key == "g" and self.gp is not None:
             # Watch the car ahead, then the one ahead of that, and on round
-            # the running order until it comes back to you; SHIFT+G steps
+            # the running order until it comes back to you; SHIFT+G goes straight home;
             # back the way it came (see _next_watch). Its onboard is the
             # chase, as for the ghost.
             back = any(held_keys[k] for k in ("shift", "left shift",
@@ -1494,8 +1494,8 @@ class Game:
         """G: the car one place ahead of the one being watched (of the
         player, to begin with), skipping the player, the leader wrapping to
         the last car -- and home once that comes round to a car already
-        seen, which a full lap of the order does. SHIFT+G retraces the
-        cars seen, back to the player.
+        seen, which a full lap of the order does. SHIFT+G goes straight
+        back to the player's own car.
 
         Kept as a history rather than counted from the order each press,
         so a pass between presses cannot make the cycle land on home (or
@@ -1513,9 +1513,8 @@ class Game:
             # Down the order (P1, P2, P3 ...); SHIFT+G back up it.
             return order[(j + (-1 if back else 1)) % len(order)]
         if back:
-            if hist:
-                hist.pop()
-            return hist[-1] if hist else None
+            hist.clear()                  # straight home, to the player's own car
+            return None
         if snap is None:
             return None
         rows = snap["rows"]

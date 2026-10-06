@@ -11,8 +11,8 @@
 직접 실행하려면:
 
 ```bash
-.venv\Scripts\python.exe run.py            # 메뉴에서 모드·서킷 선택
-.venv\Scripts\python.exe run.py --track Spa --laps 5   # 메뉴 건너뛰고 그랑프리
+python run.py            # 메뉴에서 모드·서킷 선택
+python run.py --track Spa --laps 5   # 메뉴 건너뛰고 그랑프리
 ```
 
 옵션: `--mode quali|gp`, `--track <이름>`, `--laps <n>`, `--fullscreen`, `--mute`.
@@ -44,6 +44,20 @@
   스튜어드 판정(트랙 리밋·접촉 페널티)이 모두 작동한다. 출발 순위는 서킷 선택 화면에서 A/D로 고른다.
 - **난이도 1–6** (`game/teams.py`): 낮은 그립으로 푼 계획을 따라 달리게 해 단계를 만든다. 모나 폴 랩타임:
   Novice 99.8 s, Rookie 96.3, Amateur 94.1, Club 92.1, Pro 89.2, Legend 88.1.
+
+## 설정 (메인 메뉴·서킷 선택에서 `O`)
+
+세션을 시작하기 전에만 바꿀 수 있고(경기 중에는 불가), 값은 `~/.formula-ai/settings.json`에 저장된다.
+
+| 항목 | 효과 |
+|---|---|
+| AUTO STEERING | 조향을 추종기가 맡는다. 플레이어는 A / D로 차선(한 번에 1.75 m, 최대 6 m)을 고르고 페달을 밟는다 |
+| AUTO PEDALS | 가속·브레이크도 자동(레이싱 라인 속도의 88%, 앞차 뒤에서는 간격 유지). 조향까지 켜면 차선 선택만으로 주행한다 |
+| YELLOW FLAGS | 멈춘 차가 옐로를 내고 모두 감속. 끄면 옐로 자체가 없다 |
+| DRS, SLIPSTREAM | 각각 끌 수 있다 |
+| PENALTY · TRACK LIMITS / COLLISIONS / YELLOW FLAGS | 종류별로 시간 페널티(경고 포함)를 끈다 |
+
+자동 조향·페달은 계획 해가 있는 서킷에서만 켜진다.
 
 ## AI는 어떻게 달리나
 
@@ -87,6 +101,7 @@ game/
   vehicle.py           동역학 자전거 모델 (Pacejka 타이어, 마찰원, 하중이동, TC/ABS/ESC)
   surface.py trackdata.py trackmesh.py scenery.py props.py terrain.py   트랙·노면·경치
   mintime_driver.py    계획과 추종 제어기
+  assist.py settings.py   초보자 보조(자동 조향·페달·차선)와 세션 설정
   racecraft.py raceai.py raceenv.py   판단 층 (규칙 / 학습 정책) 과 학습용 환경·심판
   drivenet.py          조향·페달 신경망 (진행 중)
   field.py fieldproc.py gpfield.py racecontrol.py   20대 필드(별도 프로세스), 레이스 컨트롤

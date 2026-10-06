@@ -6,13 +6,14 @@ sideways by a lane the player chooses with A / D, and it can work the pedals as
 well, at the pace of the line and behind any car ahead. With both on, the whole
 of driving is picking a lane.
 
-* **Auto steering** -- the follower's wheel angle replaces the player's. A and D
-  then move the car sideways, freely: held, the line the follower tracks slides
-  across the road at ``LATERAL_RATE``; let go, and the car stays where it is
-  (it does not drift back to the racing line; Q takes it back). It can go as far
-  as the white line -- the centre on it, so a wheel is always still inside -- and
-  no further.
-* **Auto pedals** -- the follower's throttle and brake replace the player's.
+* **Auto steering** -- the follower's wheel angle replaces the player's, until
+  the player steers: A or D held is the player's own wheel, whole, and the
+  follower waits. Let go, and it takes the car over again from where it is -- it
+  follows the line it finds itself on rather than swinging back to the racing
+  line (Q takes it back there) -- but no further out than the white line, the
+  centre on it, so a wheel is always still inside.
+* **Auto pedals** -- the follower's throttle and brake replace the player's, until
+  the player works a pedal: W or S held is the player's own pedals.
   It drives exactly as an AI of the chosen difficulty does: the plan and the
   pace of a mid-grid driver of that level (``teams.skill_for``), so Novice is
   slow and careful and Legend is flat out; capped to what a car ahead in the
@@ -28,10 +29,8 @@ from . import config, settings, teams
 from .mintime_driver import Plan, PlanFollower, path_file
 from .vehicle import Controls
 
-#: How fast held A / D slides the line across the road (m/s), and how close the
-#: car's centre may get to a white line: on it. Past that, all four wheels are
-#: out and the car has left the track.
-LATERAL_RATE = 4.5
+#: How close the car's centre may get to a white line when the follower takes
+#: over: on it. Past that, all four wheels are out and the car has left the track.
 EDGE_ROOM = 0.0
 REACH = 30.0
 #: How briskly the car follows the line being slid (rad/s).
@@ -90,8 +89,6 @@ class Assist:
         k, f = self.plan.locate(vehicle.pos, i)
         self._k = k
         lo, hi = self._room(k)
-        if self.steer:
-            self.target += manual.steer * LATERAL_RATE * dt
         want = self.target = min(max(self.target, lo), hi)
         speed = max(vehicle.speed, 5.0)
         acc = OMEGA * OMEGA * (want - self.offset) - 2.0 * OMEGA * self.rate
@@ -103,9 +100,17 @@ class Assist:
         out = Controls(throttle=manual.throttle, brake=manual.brake, steer=manual.steer,
                        handbrake=manual.handbrake)
         if self.steer:
-            out.steer = ctl.steer
-            out.analog_steer = True
-        if self.pedals:
+            if manual.steer:
+                # The player's own wheel. The follower keeps the line it is on
+                # (where the car is now, kept inside the road) for when it takes
+                # over again.
+                here = min(max(self.offset + self.follow.lat_err, lo), hi)
+                self.target = self.offset = here
+                self.rate = 0.0
+            else:
+                out.steer = ctl.steer
+                out.analog_steer = True
+        if self.pedals and not (manual.throttle or manual.brake):
             out.throttle, out.brake = ctl.throttle, ctl.brake
         return out
 

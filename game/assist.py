@@ -7,9 +7,11 @@ well, at the pace of the line and behind any car ahead. With both on, the whole
 of driving is picking a lane.
 
 * **Auto steering** -- the follower's wheel angle replaces the player's. A and D
-  then step the lane (a tap moves one lane, 1.75 m, left or right, up to 6 m off
-  the line and never closer than a wheel to the white line); the car eases across
-  rather than snapping, as the AI's lane changes do.
+  then move the car sideways, freely: held, the line the follower tracks slides
+  across the road at ``LATERAL_RATE``; let go, and the car stays where it is
+  (it does not drift back to the racing line; Q takes it back). It can go as far
+  as the white line -- the centre on it, so a wheel is always still inside -- and
+  no further.
 * **Auto pedals** -- the follower's throttle and brake replace the player's.
   The speed is the line's at a beginner's pace (``PACE``), capped to what a car
   ahead in the lane leaves room for.
@@ -24,15 +26,16 @@ from . import config, settings
 from .mintime_driver import Plan, PlanFollower, path_file
 from .vehicle import Controls
 
-#: Lane step (m), reach (m), and how close the car's centre may get to a white
-#: line (a wheel's half track and a quarter metre, as the AI's rooms are).
-LANE_STEP = 1.75
-LANE_MAX = 6.0
-EDGE_ROOM = config.WHEEL_HALF_TRACK + 0.25
+#: How fast held A / D slides the line across the road (m/s), and how close the
+#: car's centre may get to a white line: on it. Past that, all four wheels are
+#: out and the car has left the track.
+LATERAL_RATE = 4.5
+EDGE_ROOM = 0.0
+REACH = 30.0
 #: The share of the line's speed the pedals drive at, for a first-time driver.
 PACE = 0.88
-#: The lane change's natural frequency (rad/s): a change takes about 1.6 s.
-OMEGA = 2.6
+#: How briskly the car follows the line being slid (rad/s).
+OMEGA = 5.0
 #: Plans to try, safest first: a beginner is better on a line solved for less
 #: grip than the limit.
 TAGS = ("g90", "g86", "g94", "g82", "g97", "g78", "g74")
@@ -65,19 +68,14 @@ class Assist:
         self._i = 0
 
     # -- lane ---------------------------------------------------------------
-    def step_lane(self, direction: int) -> None:
-        """One lane left (-1) or right (+1); the road's room is applied every
-        tick, so asking for more than it holds just goes to the edge."""
-        self.target = min(max(self.target + direction * LANE_STEP, -LANE_MAX), LANE_MAX)
-
     def center(self) -> None:
         self.target = 0.0
 
     def _room(self, k: int) -> tuple[float, float]:
         """(left limit, right limit) of the lane offset, now and a little way on."""
         pl, tr = self.plan, self.track
-        lo, hi = -LANE_MAX, LANE_MAX
-        for m in (0.0, 40.0, 90.0):
+        lo, hi = -REACH, REACH
+        for m in (0.0, 30.0, 70.0):
             kk, _ = pl.ahead(k, 0.0, m) if m else (k, 0.0)
             n = float(pl.n_raw[kk])
             lo = max(lo, -tr.w_left[kk] + EDGE_ROOM - n)
@@ -89,7 +87,9 @@ class Assist:
         i, _ = self.surface.progress(vehicle.pos)
         k, f = self.plan.locate(vehicle.pos, i)
         lo, hi = self._room(k)
-        want = min(max(self.target, lo), hi)
+        if self.steer:
+            self.target += manual.steer * LATERAL_RATE * dt
+        want = self.target = min(max(self.target, lo), hi)
         speed = max(vehicle.speed, 5.0)
         acc = OMEGA * OMEGA * (want - self.offset) - 2.0 * OMEGA * self.rate
         self.rate += acc * dt
@@ -108,9 +108,8 @@ class Assist:
 
     @property
     def lane_text(self) -> str:
-        n = round(self.target / LANE_STEP)
-        side = "L" if n < 0 else "R" if n > 0 else "LINE"
-        return side if n == 0 else f"{side} {abs(n)}"
+        """Metres off the racing line, + to the right."""
+        return "ON THE LINE" if abs(self.target) < 0.25 else f"{self.target:+.1f} m"
 
 
 def leader_cap(vehicle, others) -> float:

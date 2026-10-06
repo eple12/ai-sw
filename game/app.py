@@ -727,8 +727,6 @@ class Game:
         ctl = Controls(throttle=float(up), brake=float(down),
                        steer=float(steer), handbrake=bool(held_keys["space"]))
         if self.assist is not None:
-            if self.assist.steer:
-                ctl.steer = 0.0                 # A / D choose the lane instead
             cap = math.inf
             if self.assist.pedals and self.gp is not None:
                 near = [v for i, v in self.gp.proxies.items()
@@ -754,7 +752,7 @@ class Game:
         a = self.assist
         parts = []
         if a.steer:
-            parts.append(f"AUTO STEERING  ·  A / D  LANE  {a.lane_text}")
+            parts.append(f"AUTO STEERING  ·  A / D  MOVE  ·  Q  LINE  ·  {a.lane_text}")
         if a.pedals:
             parts.append("AUTO PEDALS")
         return "   ·   ".join(parts)
@@ -832,13 +830,9 @@ class Game:
             return
         if self.state == PAUSED and self._pause_key(key):
             return
-        if self.assist is not None and self.assist.steer and self.state == RACING:
-            if key in ("a", "left arrow"):
-                self.assist.step_lane(-1)
-                return
-            if key in ("d", "right arrow"):
-                self.assist.step_lane(1)
-                return
+        if self.assist is not None and self.assist.steer and key == "q":
+            self.assist.center()            # back onto the racing line
+            return
         if key == "c":
             self.cam_idx = (self.cam_idx + 1) % len(config.CAM_MODES)
             # The bonnet camera sits inside the car, which would clip messily

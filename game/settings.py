@@ -41,7 +41,7 @@ class Settings:
 
 #: (field, title, what it does) in the order of the settings screen.
 ROWS = (
-    ("auto_steer", "AUTO STEERING", "the car steers along the line; you pick the lane (A / D) and drive the pedals"),
+    ("auto_steer", "AUTO STEERING", "the car steers along the line; A / D slide it across the road, Q back to the line"),
     ("auto_pedals", "AUTO PEDALS", "throttle and brake are automatic; with auto steering, only the lane is yours"),
     ("yellow_flags", "YELLOW FLAGS", "a stricken car brings out a yellow and everyone slows down"),
     ("drs", "DRS", "drag reduction within a second of the car ahead on a straight"),

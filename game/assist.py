@@ -124,9 +124,22 @@ class Assist:
         return "ON THE LINE" if abs(self.target) < 0.25 else f"{self.target:+.1f} m"
 
 
+#: Following a car: the deceleration the player's car is allowed to need to
+#: stop behind it (m/s^2), the centre-to-centre distance it stops at (a car's
+#: length and a few metres) and the time gap kept on top, at the other car's speed.
+FOLLOW_DECEL = 9.0
+STANDOFF = config.CAR_BODY_LENGTH + 4.0
+HEADWAY = 0.4
+
+
 def leader_cap(vehicle, others) -> float:
-    """Speed (m/s) that keeps a gap to the nearest car ahead in the player's
-    lane; ``inf`` if there is none. *others*: vehicles of the cars around."""
+    """Speed (m/s) from which the car can still stop behind the nearest car ahead
+    in its lane; ``inf`` if there is none. *others*: vehicles of the cars around.
+
+    The speed that braking at ``FOLLOW_DECEL`` would bring to the leader's speed
+    over the room between them -- so on the grid, behind a car that has not
+    moved, the car may still accelerate until the room is nearly used up (a cap
+    of "the leader's speed" held it on the brake until the car ahead was away)."""
     sy, cy = math.sin(vehicle.yaw), math.cos(vehicle.yaw)
     px, pz = float(vehicle.pos[0]), float(vehicle.pos[1])
     best = None
@@ -134,9 +147,10 @@ def leader_cap(vehicle, others) -> float:
         dx, dz = float(o.pos[0]) - px, float(o.pos[1]) - pz
         ahead = dx * sy + dz * cy
         side = dx * cy - dz * sy
-        if 2.0 < ahead < 80.0 and abs(side) < 2.8 and (best is None or ahead < best[0]):
-            best = (ahead, float(o.vel[0]) * sy + float(o.vel[1]) * cy)
+        if 2.0 < ahead < 120.0 and abs(side) < 2.8 and (best is None or ahead < best[0]):
+            best = (ahead, max(float(o.vel[0]) * sy + float(o.vel[1]) * cy, 0.0))
     if best is None:
         return math.inf
     gap, v = best
-    return max(v, 0.0) * 0.97 + max(gap - 10.0, 0.0) * 0.45 if gap > 10.0 else max(v, 0.0) * 0.85
+    room = max(gap - STANDOFF - HEADWAY * v, 0.0)
+    return math.sqrt(v * v + 2.0 * FOLLOW_DECEL * room)

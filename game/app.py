@@ -178,7 +178,7 @@ class Game:
         self._dt = 1.0 / 60.0
         st = settings.current
         if (st.auto_steer or st.auto_pedals) and not spectate and assist_mod.available(track_name):
-            self.assist = assist_mod.Assist(self.track, self.surface)
+            self.assist = assist_mod.Assist(self.track, self.surface, self.level)
         #: Snapshot columns, and each AI car's dot colour on the map.
         self._C = SNAP_COLS
         self._dot_col = {}

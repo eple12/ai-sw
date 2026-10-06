@@ -13,8 +13,10 @@ of driving is picking a lane.
   as the white line -- the centre on it, so a wheel is always still inside -- and
   no further.
 * **Auto pedals** -- the follower's throttle and brake replace the player's.
-  The speed is the line's at a beginner's pace (``PACE``), capped to what a car
-  ahead in the lane leaves room for.
+  It drives exactly as an AI of the chosen difficulty does: the plan and the
+  pace of a mid-grid driver of that level (``teams.skill_for``), so Novice is
+  slow and careful and Legend is flat out; capped to what a car ahead in the
+  lane leaves room for.
 
 Either can be on alone. Settings only: nothing here can be changed mid-race.
 """
@@ -22,7 +24,7 @@ from __future__ import annotations
 
 import math
 
-from . import config, settings
+from . import config, settings, teams
 from .mintime_driver import Plan, PlanFollower, path_file
 from .vehicle import Controls
 
@@ -32,32 +34,31 @@ from .vehicle import Controls
 LATERAL_RATE = 4.5
 EDGE_ROOM = 0.0
 REACH = 30.0
-#: The share of the line's speed the pedals drive at, for a first-time driver.
-PACE = 0.88
 #: How briskly the car follows the line being slid (rad/s).
 OMEGA = 5.0
-#: Plans to try, safest first: a beginner is better on a line solved for less
-#: grip than the limit.
-TAGS = ("g90", "g86", "g94", "g82", "g97", "g78", "g74")
-
-
-def plan_path(circuit: str):
-    for tag in TAGS:
-        p = path_file(circuit, tag)
-        if p.exists():
-            return p
-    return None
+def _grips(circuit: str) -> tuple:
+    return tuple(g for g in teams.PLAN_GRIPS if path_file(circuit, f"g{round(g * 100):02d}").exists())
 
 
 def available(circuit: str) -> bool:
-    return plan_path(circuit) is not None
+    return bool(_grips(circuit))
+
+
+def plan_for(circuit: str, level: int):
+    """(plan path, pace) of a mid-grid driver of this difficulty -- what the
+    AI at that level drives."""
+    lv = teams.DIFFICULTY.get(level, teams.DIFFICULTY[teams.DEFAULT_LEVEL])
+    grip = lv.top_grip - lv.spread * 0.5
+    tag, pace = teams.plan_tag(grip, _grips(circuit))
+    return path_file(circuit, tag), pace
 
 
 class Assist:
-    def __init__(self, track, surface):
+    def __init__(self, track, surface, level: int = teams.DEFAULT_LEVEL):
         self.track = track
         self.surface = surface
-        self.plan = Plan(plan_path(track.name))
+        path, self.pace = plan_for(track.name, level)
+        self.plan = Plan(path)
         self.follow = PlanFollower(self.plan)
         self.follow.track = track
         self.steer = settings.current.auto_steer
@@ -98,7 +99,7 @@ class Assist:
         self.offset += self.rate * dt
         ctl = self.follow.controls(vehicle, k, f, offset=self.offset,
                                    d_off=self.rate / speed, dd_off=acc / (speed * speed),
-                                   v_cap=cap, pace=PACE if self.pedals else 1.0)
+                                   v_cap=cap, pace=self.pace if self.pedals else 1.0)
         out = Controls(throttle=manual.throttle, brake=manual.brake, steer=manual.steer,
                        handbrake=manual.handbrake)
         if self.steer:

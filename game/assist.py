@@ -66,6 +66,7 @@ class Assist:
         self.offset = 0.0          # where the car is steering for now
         self.rate = 0.0
         self._i = 0
+        self._k = 0
 
     # -- lane ---------------------------------------------------------------
     def center(self) -> None:
@@ -86,6 +87,7 @@ class Assist:
     def controls(self, vehicle, manual: Controls, dt: float, cap: float = math.inf) -> Controls:
         i, _ = self.surface.progress(vehicle.pos)
         k, f = self.plan.locate(vehicle.pos, i)
+        self._k = k
         lo, hi = self._room(k)
         if self.steer:
             self.target += manual.steer * LATERAL_RATE * dt
@@ -105,6 +107,15 @@ class Assist:
         if self.pedals:
             out.throttle, out.brake = ctl.throttle, ctl.brake
         return out
+
+    def view(self) -> tuple[float, float]:
+        """(racing line, tracked line) as fractions across the road at the car,
+        0 = left white line, 1 = right: what the HUD's box draws."""
+        k = self._k
+        wl, wr = float(self.track.w_left[k]), float(self.track.w_right[k])
+        n = float(self.plan.n_raw[k])
+        span = max(wl + wr, 1e-6)
+        return (n + wl) / span, (n + self.target + wl) / span
 
     @property
     def lane_text(self) -> str:

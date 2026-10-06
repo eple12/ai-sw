@@ -170,12 +170,11 @@ class Game:
             self._hud_rows = len(self.quali_field) + (0 if spectate else 1)
         else:
             self._hud_rows = 2
-        self.hud = HUD(self.track, laps, mode, rows=self._hud_rows)
+        self.hud = HUD(self.track, laps, mode, rows=self._hud_rows,
+                       assist=self._assist_word(track_name, spectate))
         #: The player's assists (settings screen): auto steering / pedals and the
         #: lane choice. None when neither is on, or the circuit has no plan.
         self.assist = None
-        self._assist_txt = None
-        self._assist_hud = None
         self._dt = 1.0 / 60.0
         st = settings.current
         if (st.auto_steer or st.auto_pedals) and not spectate and assist_mod.available(track_name):
@@ -733,29 +732,19 @@ class Game:
                         if i != self.field.player and not self.gp._ghost.get(i, False)]
                 cap = assist_mod.leader_cap(self.vehicle, near)
             ctl = self.assist.controls(self.vehicle, ctl, self._dt, cap)
-            self._assist_text().text = self._assist_label()
         return ctl
 
-    def _assist_text(self):
-        """The assist's line on the HUD; rebuilt with the HUD (a window resize
-        makes a new one)."""
-        if self._assist_txt is None or self._assist_hud is not self.hud:
-            from ursina import Text
-            from .ui import pick_font
-            self._assist_txt = Text("", parent=self.hud.root, font=pick_font(), scale=0.9,
-                                    color=pal.rgb(235, 235, 240), origin=(0, 0),
-                                    position=(0, -0.43, -0.2))
-            self._assist_hud = self.hud
-        return self._assist_txt
-
-    def _assist_label(self) -> str:
-        a = self.assist
-        parts = []
-        if a.steer:
-            parts.append(f"AUTO STEERING  ·  A / D  MOVE  ·  Q  LINE  ·  {a.lane_text}")
-        if a.pedals:
-            parts.append("AUTO PEDALS")
-        return "   ·   ".join(parts)
+    @staticmethod
+    def _assist_word(track_name: str, spectate: bool) -> str:
+        """The one word the HUD's assist box carries, or '' for no box."""
+        st = settings.current
+        if spectate or not (st.auto_steer or st.auto_pedals):
+            return ""
+        if not assist_mod.available(track_name):
+            return ""
+        if st.auto_steer and st.auto_pedals:
+            return "AUTO"
+        return "AUTO STEER" if st.auto_steer else "AUTO PEDALS"
 
     def _cooldown_controls(self) -> Controls:
         """The autopilot drives the car from the flag onwards, and keeps going.
@@ -1290,7 +1279,7 @@ class Game:
             # anchors to the screen edges when it is built, so it is rebuilt.
             self.hud.destroy()
             self.hud = HUD(self.track, self.total_laps, self.mode,
-                           rows=self._hud_rows)
+                           rows=self._hud_rows, assist=self.hud.assist)
             self.hud.root.enabled = not self.hud_hidden
             self._tower_t = -1.0
         # While spectating, the readouts follow the watched car -- its speed,
@@ -1380,6 +1369,7 @@ class Game:
         if self.gp is not None:
             dots = [(p.pos, self._dot_col[k]) for k, p in self.gp.proxies.items()]
         self.hud.update(
+            assist_view=self.assist.view() if self.assist is not None else None,
             speed_kmh=v.speed * 3.6,
             speed_frac=min(1.0, v.speed / config.MAX_SPEED),
             lap=show_lap,

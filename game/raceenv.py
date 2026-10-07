@@ -50,7 +50,7 @@ PAST_ZONE = 250.0
 
 REWARD = {
     "progress": 1.0,       # per 100 m advanced
-    "place": 1.0,          # per place gained (lost: minus)
+    "place": 2.0,          # per place gained (lost: minus)
     "contact": -1.0,       # per contact above contact.HIT_IMPULSE
     "steward": -4.0,       # per warning or penalty the stewards give the car
     "penalty_s": -0.5,     # per second of time penalty
@@ -58,8 +58,9 @@ REWARD = {
     "strike": -0.5,        # per track-limits strike
     "switch": -0.05,       # per 3.5 m of lane change asked for
     # What a spectator calls unnatural, though no steward does:
-    "queue": -0.6,         # per second held up behind a car with open road beside
-    "kerb": -1.0,          # per second with two wheels or more on the kerb or beyond
+    "queue": -2.0,         # per second held up behind a car with open road beside
+    # Riding the kerb is the racing line's own business, not a fault.
+    "kerb": 0.0,           # per second with two wheels or more on the kerb or beyond
 }
 
 #: The slower car's pace in the tow scene, drawn from this range (the ego drives
@@ -315,7 +316,7 @@ class Referee:
             self.racing_s[i] += 3 * DT
             if e.vehicle.grip_scale < KERB_GRIP:
                 self.kerb_s[i] += 3 * DT
-            if d._is_held and e.vehicle.speed > 15.0 and free_side(fld, i):
+            if d._slow_behind and e.vehicle.speed > 15.0 and free_side(fld, i):
                 self.queue_s[i] += 3 * DT
         for i in range(n):
             for j in range(i + 1, n):

@@ -47,7 +47,7 @@ DT = 1.0 / 60.0
 
 #: Reward (per second unless said otherwise).
 R_RECOVERY = 6.0          # each
-R_HIT = 2.0               # each
+R_HIT = float(os.environ.get("PD_R_HIT", 2.0))      # each
 R_OFF = float(os.environ.get("PD_R_OFF", 0.6))      # all four wheels beyond the white line
 # (the kerb terms can be set from the environment, which the spawned workers inherit)
 R_KERB = float(os.environ.get("PD_R_KERB", 0.8))     # two wheels or more beyond the white line
@@ -99,6 +99,8 @@ class Hook:
 
 class _Adapter:
     needs_teacher = False
+    #: Drives free of the traffic rules (see drivenet): it sees the cars itself.
+    free = True
 
     def __init__(self, hook):
         self.hook = hook
@@ -109,7 +111,8 @@ class _Adapter:
 
 def rollout(args):
     w, sigma, circuit, kind, seed = args
-    from game import config
+    from game import config, drivenet
+    drivenet_v1 = drivenet.OBS_DIM_V1
     config.DRIVE_AI = "rules"
     rng = np.random.default_rng(seed)
     fld = dd._scene(circuit, kind, seed)
@@ -145,6 +148,8 @@ def rollout(args):
             stats["kerb2"] += gs < 0.9
             stats["off"] += not on
             dv = min(float(x[13]) * 15.0, float(x[14]) * 20.0)       # + : slower than asked
+            if len(x) > drivenet_v1 and x[drivenet_v1 + 4] > 0.5 and x[drivenet_v1] < 0.8:
+                dv = 0.0                # a car close ahead in the way: slowing for it is not slowness
             r = -R_RECOVERY * drec - R_HIT * dhit
             r -= DT * (R_OFF * (not on) + R_KERB * (gs < 0.9) + R_KERB1 * (gs < 0.98)
                        + R_ERR * max(err - 1.0, 0.0) ** 2
@@ -198,7 +203,10 @@ def main():
     ap.add_argument("--r-kerb", type=float, default=None)
     ap.add_argument("--r-kerb1", type=float, default=None)
     ap.add_argument("--r-off", type=float, default=None)
+    ap.add_argument("--r-hit", type=float, default=None)
     args = ap.parse_args()
+    if args.r_hit is not None:
+        os.environ["PD_R_HIT"] = str(args.r_hit)
     if args.r_kerb is not None:
         os.environ["PD_R_KERB"] = str(args.r_kerb)
     if args.r_off is not None:

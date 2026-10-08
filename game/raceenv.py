@@ -27,7 +27,9 @@ tools/race_metrics.py.
 """
 from __future__ import annotations
 
+import json
 import math
+import os
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -62,6 +64,9 @@ REWARD = {
     # Riding the kerb is the racing line's own business, not a fault.
     "kerb": 0.0,           # per second with two wheels or more on the kerb or beyond
 }
+
+if os.environ.get("RACEAI_REWARD"):
+    REWARD.update(json.loads(os.environ["RACEAI_REWARD"]))
 
 #: The slower car's pace in the tow scene, drawn from this range (the ego drives
 #: 1.0): a car 1.5% slower than the one behind it is never caught in the few

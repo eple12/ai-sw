@@ -190,7 +190,11 @@ def main():
     ap.add_argument("--seed0", type=int, default=100000)
     ap.add_argument("--max-hours", type=float, default=0.0)
     ap.add_argument("--resume", action="store_true")
+    ap.add_argument("--reward", default="", help='JSON of raceenv.REWARD terms to change, e.g. {"place": 4}')
     args = ap.parse_args()
+    if args.reward:
+        import os
+        os.environ["RACEAI_REWARD"] = args.reward      # the workers read it on import
 
     import torch
     import torch.nn.functional as F

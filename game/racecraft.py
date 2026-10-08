@@ -64,6 +64,8 @@ LOOK_NODES = 90
 #: the track and across it (body length / width plus a margin).
 GAP_ALONG = config.CAR_BODY_LENGTH + 1.5
 GAP_ACROSS = config.CAR_BODY_WIDTH + 0.6
+#: A car this close ahead (m) in the lane, with the car below its own pace, holds it up.
+HELD_GAP = 30.0
 #: Wheel centres kept this far inside the white line by a lane.
 EDGE_ROOM = config.WHEEL_HALF_TRACK + 0.25
 #: Decelerations the planner assumes it can count on (m/s^2) -- less on the
@@ -1193,7 +1195,11 @@ class RaceDriver:
         # Whatever drives the car, is it in fact behind a car and slower than its
         # own pace? (What the following rule would call held up is only that when
         # the rule binds.)
-        self._slow_behind = self.leader is not None and me.v < 0.96 * own
+        self._slow_behind = False
+        if self.leader is not None and me.v < 0.96 * own:
+            lead_view = next((o for o in field if o.idx == self.leader), None)
+            self._slow_behind = (lead_view is not None
+                                 and 0.0 < self.frame.ds(me.s, lead_view.s) < HELD_GAP)
         if free and not teach:
             held = self._slow_behind
         if teach and (d or self.lane[1] != self.lane[3] or self.abs_lane is not None):

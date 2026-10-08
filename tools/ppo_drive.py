@@ -46,7 +46,7 @@ GAMMA, LAM = 0.995, 0.95
 DT = 1.0 / 60.0
 
 #: Reward (per second unless said otherwise).
-R_RECOVERY = 6.0          # each
+R_RECOVERY = float(os.environ.get("PD_R_REC", 6.0))      # each spin / off / stuck needing recovery
 R_HIT = float(os.environ.get("PD_R_HIT", 2.0))      # each
 R_OFF = float(os.environ.get("PD_R_OFF", 0.6))      # all four wheels beyond the white line
 # (the kerb terms can be set from the environment, which the spawned workers inherit)
@@ -204,9 +204,12 @@ def main():
     ap.add_argument("--r-kerb1", type=float, default=None)
     ap.add_argument("--r-off", type=float, default=None)
     ap.add_argument("--r-hit", type=float, default=None)
+    ap.add_argument("--r-rec", type=float, default=None)
     args = ap.parse_args()
     if args.r_hit is not None:
         os.environ["PD_R_HIT"] = str(args.r_hit)
+    if args.r_rec is not None:
+        os.environ["PD_R_REC"] = str(args.r_rec)
     if args.r_kerb is not None:
         os.environ["PD_R_KERB"] = str(args.r_kerb)
     if args.r_off is not None:

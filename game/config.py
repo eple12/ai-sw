@@ -908,6 +908,11 @@ RACE_AI_POLICY = ASSET_DIR / "policies" / "raceai.npz"
 # "rules" (mintime_driver.PlanFollower, the hand-built tracker).
 DRIVE_AI = "rl"
 DRIVE_AI_POLICY = ASSET_DIR / "policies" / "drivenet.npz"
+# One network for both the decisions and the driving (game/onenet.py, weights in
+# assets/policies/onenet.npz): "rl" puts it in place of the two above, "off" keeps
+# them. (FORMULA_ONE_AI / FORMULA_ONE_AI_POLICY set it from the environment.)
+ONE_AI = os.environ.get("FORMULA_ONE_AI", "rl")
+ONE_AI_POLICY = os.environ.get("FORMULA_ONE_AI_POLICY") or ASSET_DIR / "policies" / "onenet.npz"
 # Seconds a race control message about the player stays up (others: 60%).
 # Under a yellow flag every car, the player's included, keeps below this speed
 # for the stretch the flag covers (racecontrol.py judges it, racecraft.py drives

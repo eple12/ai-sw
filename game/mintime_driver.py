@@ -29,7 +29,7 @@ import math
 
 import numpy as np
 
-from . import config, drivenet
+from . import config, drivenet, raceai
 from .vehicle import Controls, Vehicle
 
 
@@ -178,6 +178,9 @@ class PlanFollower:
         self.drive = None
         self._drv_n = 0
         self._drv_a = (0.0, 0.0)
+        #: For a network that also decides (onenet): the decision observation,
+        #: rebuilt on a decision tick and held in between.
+        self._dec_obs = np.zeros(raceai.OBS_DIM, np.float32)
 
     def controls(self, vehicle: Vehicle, k: int, f: float,
                  offset: float = 0.0, d_off: float = 0.0, dd_off: float = 0.0,
@@ -335,8 +338,11 @@ class PlanFollower:
             percept = look()
         elif getattr(self.drive, "free", False):
             percept = drivenet.NO_CARS          # alone: nothing in view
-        return drivenet.features(self, vehicle, k, f, offset, d_off, dd_off, v_cap, pace,
-                                 hold_speed, flat_out, v_min, self._drv_a, percept)
+        x = drivenet.features(self, vehicle, k, f, offset, d_off, dd_off, v_cap, pace,
+                              hold_speed, flat_out, v_min, self._drv_a, percept)
+        if getattr(self.drive, "one", False):
+            x = np.concatenate([x, self._dec_obs])
+        return x
 
     def _net_controls(self, drv, vehicle, k, f, offset, d_off, dd_off, v_cap, pace,
                       hold_speed, flat_out, v_min, free=None):

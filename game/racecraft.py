@@ -480,6 +480,7 @@ class RaceDriver:
         self.policy = None
         self.pace_mult = 1.0
         self._slow_behind = False
+        self._ctx = None
         #: Tick of the last lane decision (a lane change, or the start of a dive
         #: down the inside): how long ago the car committed to where it is.
         self.lane_tick = 0
@@ -1144,6 +1145,7 @@ class RaceDriver:
                     d, dd, ddd = d_t, 0.0, 0.0
             return self._drive(vehicle, me, k, f, d, dd, ddd, cap, pace, flat, dt, fin)
         before = None
+        self._ctx = (vehicle, k, f)
         if self.ticks % self.frame.plan_every == 0:
             if self.watch is not None and hasattr(self.watch, "before"):
                 # What the decision is made FROM -- taken ahead of it, or it
@@ -1213,6 +1215,18 @@ class RaceDriver:
             self.watch(self, me, field, rule_pace, before)
         fin = (d_free, dd_free, ddd_free, yc, me, field) if free else None
         return self._drive(vehicle, me, k, f, d, dd, ddd, cap, pace, flat, dt, fin)
+
+    def one_input(self, me: CarView, field: list[CarView]) -> np.ndarray:
+        """The input of a network that both decides and drives (onenet), now:
+        the driver's observation from the lane as it stands, and the decision
+        observation the follower holds."""
+        vehicle, k, f = self._ctx
+        d, dd, ddd = self._offset_at(me.s)
+        d = self._clip_offset(k, d)
+        yc = self._yellow_cap(me)
+        free = (d, dd, ddd, yc, lambda: drivenet.perceive(self, me, field))
+        return self.follow._features(vehicle, k, f, d, dd, ddd, yc,
+                                     self.pace_lap * self.pace_mult, False, False, 0.0, free)
 
     def _modes(self) -> tuple[bool, bool]:
         """(free, teach): whether a network that sees the cars around drives

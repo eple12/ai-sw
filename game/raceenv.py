@@ -542,6 +542,17 @@ class RaceEnv:
         for _ in range(fld.frame.plan_every):
             fld.step(DT)
             self.ref.update()
+        rewards, parts = self.reward_step()
+        ego = fld.cars[self.sc.egos[0]]
+        done = fld.t >= self.sc.max_t
+        if ego.limits.progress is not None and self.ref.start_progress is not None:
+            done = done or (ego.limits.progress - self.ref.start_progress[ego.idx]
+                            >= self.sc.goal)
+        return self._obs(), rewards, done, {"parts": parts, "t": fld.t}
+
+    def reward_step(self):
+        """The egos' rewards for what has happened since the last call:
+        ``(rewards, parts)`` per ego."""
         rewards, parts = {}, {}
         for i in self.sc.egos:
             now, prev = self._snapshot(i), self._prev[i]
@@ -560,9 +571,4 @@ class RaceEnv:
             parts[i] = p
             rewards[i] = float(sum(p.values()))
             self._prev[i] = now
-        ego = fld.cars[self.sc.egos[0]]
-        done = fld.t >= self.sc.max_t
-        if ego.limits.progress is not None and self.ref.start_progress is not None:
-            done = done or (ego.limits.progress - self.ref.start_progress[ego.idx]
-                            >= self.sc.goal)
-        return self._obs(), rewards, done, {"parts": parts, "t": fld.t}
+        return rewards, parts

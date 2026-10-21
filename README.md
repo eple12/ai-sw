@@ -45,12 +45,15 @@ python run.py --track Spa --laps 5   # 메뉴 건너뛰고 그랑프리
 - **난이도 1–6** (`game/teams.py`): 낮은 그립으로 푼 계획을 따라 달리게 해 단계를 만든다. 모나 폴 랩타임:
   Novice 99.8 s, Rookie 96.3, Amateur 94.1, Club 92.1, Pro 89.2, Legend 88.1.
 
-## 설정 (메인 메뉴·서킷 선택에서 `O`)
+## 설정 (메인 메뉴의 SETTINGS 버튼 · `O` · 일시정지 카드의 SETTINGS)
 
-세션을 시작하기 전에만 바꿀 수 있고(경기 중에는 불가), 값은 `~/.formula-ai/settings.json`에 저장된다.
+값은 `~/.formula-ai/settings.json`에 저장된다. 경기 중(ESC → SETTINGS)에는 수동 변속, 조향 감도, TC·ABS·조향 보조만
+바꿀 수 있고(나머지는 흐리게 표시), 규칙·자동 주행 항목은 세션을 시작하기 전에만 바꾼다. 항목이 많아 W/S로 스크롤된다.
 
 | 항목 | 효과 |
 |---|---|
+| TRACTION CONTROL, ABS, STEERING ASSIST | 운전 보조. 경기 중 `T`는 셋을 한꺼번에 켜고 끈다 |
+| MANUAL GEARBOX, STEERING SENSITIVITY | 수동 변속(휠 패들 / E·Z), 휠 감도 0.5x~4.0x |
 | AUTO STEERING | 조향을 추종기가 맡는다. A / D를 누르고 있는 동안은 내 조향이 우선이고, 놓으면 추종기가 그 자리의 선을 이어서 따라간다(레이싱 라인으로 되돌아가지 않고, 흰 선 밖으로는 나가지 않게). Q는 레이싱 라인으로 복귀 |
 | AUTO PEDALS | 가속·브레이크도 자동(W / S를 누르는 동안은 내 입력이 우선). 선택한 난이도의 중위권 AI와 같은 계획과 페이스로 달리고(Novice는 느리고 조심스럽게, Legend는 전력으로), 앞차 뒤에서는 간격을 유지. 조향까지 켜면 옆으로 움직이는 입력만으로 주행한다 |
 | YELLOW FLAGS | 멈춘 차가 옐로를 내고 모두 감속. 끄면 옐로 자체가 없다 |

@@ -634,7 +634,7 @@ class SettingsMenu:
     W / S pick a row, A / D or ENTER flip it, ESC saves and goes back. Never
     reachable during a race."""
 
-    TOP, PITCH, ROW_H, W = 0.215, 0.083, 0.072, 1.62
+    TOP, PITCH, ROW_H, W = 0.215, 0.068, 0.062, 1.62
 
     def __init__(self, on_back):
         self.on_back = on_back
@@ -666,19 +666,31 @@ class SettingsMenu:
 
     def _refresh(self):
         for k, r in enumerate(self.rows):
-            on = bool(getattr(settings.current, r["name"]))
+            val = getattr(settings.current, r["name"])
+            on = bool(val)
             focus = k == self.sel
             r["bg"].color = PANEL_HI if focus else PANEL
             r["bar"].enabled = focus
             r["title"].color = WHITE if focus else GREY
             r["desc"].color = GREY if focus else GREY_DIM
             r["box"].color = RED if on else (PANEL if focus else PANEL_HI)
-            r["val"].text = "ON" if on else "OFF"
-            r["val"].color = WHITE if on else GREY
+            if isinstance(val, float):
+                r["box"].color = RED if focus else PANEL_HI
+                r["val"].text = f"{val:.1f}x"
+                r["val"].color = WHITE
+            else:
+                r["val"].text = "ON" if on else "OFF"
+                r["val"].color = WHITE if on else GREY
 
     def _flip(self, to=None):
         name = self.rows[self.sel]["name"]
-        cur = bool(getattr(settings.current, name))
+        cur = getattr(settings.current, name)
+        if isinstance(cur, float):
+            step = 0.1 if to else -0.1 if to is False else 0.0
+            setattr(settings.current, name, round(min(4.0, max(0.5, cur + step)), 1))
+            self._refresh()
+            return
+        cur = bool(cur)
         setattr(settings.current, name, (not cur) if to is None else to)
         self._refresh()
 

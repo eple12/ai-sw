@@ -39,6 +39,14 @@ TRAIN_KINDS = {"start": 0.25, "race": 0.15, "pack": 0.15, "sbs": 0.10, "defend":
                "tow": 0.18, "merge": 0.05}
 HORIZON = {"race": 100.0}
 GAMMA_F, LAM = 0.995, 0.95
+#: Reward per metre driven (the speed is the car's own business: there is no speed
+#: to keep to), and whether slowing for a car close ahead is exempt from the
+#: slowness term (0: not).
+R_PROG = float(os.environ.get("PO_R_PROG", 0.0))
+EXEMPT = int(os.environ.get("PO_EXEMPT", 1))
+#: Share of episodes in which some cars are thrown off the road (and the metres
+#: beyond the white line they land).
+KICK_P = float(os.environ.get("PO_KICK_P", 0.0))
 GAMMA_S = 0.99
 DT = 1.0 / 60.0
 
@@ -110,6 +118,18 @@ def _scenario(circuit, kind, seed):
     return sc
 
 
+def _kick(fld, i, rng):
+    """Throw car *i* off the road: beyond a white line, at an angle, slower."""
+    from game import raceenv
+    e = fld.cars[i]
+    me = fld.views[i]
+    k = fld.frame.node(me.s)
+    side = 1.0 if rng.random() < 0.5 else -1.0
+    edge = float(fld.track.w_right[k] if side > 0 else fld.track.w_left[k])
+    raceenv._place(fld, e, me.s, 0.0, lateral_abs=side * (edge + float(rng.uniform(1.5, 5.0))),
+                   yaw_off=float(rng.normal(0.0, 0.5)), speed=float(rng.uniform(8.0, 28.0)))
+
+
 def rollout(args):
     w, sigma, T, circuit, kind, seed, sample = args
     from game import drivenet, onenet, raceenv
@@ -132,10 +152,17 @@ def rollout(args):
     parts_sum = {}
     plan_every = fld.frame.plan_every
     tick = 0
+    kicks = []
+    if sample and KICK_P > 0.0 and rng.random() < KICK_P and kind in ("start", "race", "pack"):
+        for i in rng.permutation(sc.egos)[:max(1, len(sc.egos) // 6)]:
+            kicks.append((float(rng.uniform(4.0, 14.0)), int(i)))
     while fld.t < sc.max_t:
         fld.step(DT)
         env.ref.update()
         tick += 1
+        while kicks and fld.t >= kicks[0][0]:
+            _, ki = kicks.pop(0)
+            _kick(fld, ki, rng)
         for i, h in hooks.items():
             e = fld.cars[i]
             d = e.driver
@@ -154,13 +181,13 @@ def rollout(args):
             x = h.last_x
             err = abs(float(x[0])) * 3.0
             dv = min(float(x[13]) * 15.0, float(x[14]) * 20.0)
-            if x[v1 + 4] > 0.5 and x[v1] < 0.8:
+            if EXEMPT and x[v1 + 4] > 0.5 and x[v1] < 0.8:
                 dv = 0.0                  # a car close ahead in the way: slowing for it is not slowness
             r = -pdv.R_RECOVERY * drec - pdv.R_HIT * dhit
             r -= DT * (pdv.R_OFF * (not on) + pdv.R_KERB * (gs < 0.9) + pdv.R_KERB1 * (gs < 0.98)
                        + pdv.R_ERR * max(err - 1.0, 0.0) ** 2
                        + (pdv.R_SLOW * dv if dv > 0.0 else pdv.R_FAST * -dv))
-            h.fr[-1] += r
+            h.fr[-1] += r + R_PROG * float(e.vehicle.speed) * DT
         if tick % plan_every == 0:
             rewards, parts = env.reward_step()
             for i, h in hooks.items():
@@ -256,9 +283,18 @@ def main():
     ap.add_argument("--r-rec", type=float, default=None)
     ap.add_argument("--r-off", type=float, default=None)
     ap.add_argument("--r-kerb", type=float, default=None)
+    ap.add_argument("--r-prog", type=float, default=None, help="reward per metre driven")
+    ap.add_argument("--r-fast", type=float, default=None, help="penalty per m/s over the plan's speed")
+    ap.add_argument("--r-slow", type=float, default=None, help="penalty per m/s under it")
+    ap.add_argument("--exempt", type=int, default=None, help="1: slowing for a car close ahead costs nothing")
+    ap.add_argument("--kick-p", type=float, default=None, help="share of episodes with cars thrown off the road")
+    ap.add_argument("--free-off-t", type=float, default=None,
+                    help="seconds off the road before the recovery routine takes over")
     args = ap.parse_args()
     for flag, env in ((args.r_hit, "PD_R_HIT"), (args.r_rec, "PD_R_REC"), (args.r_off, "PD_R_OFF"),
-                      (args.r_kerb, "PD_R_KERB")):
+                      (args.r_kerb, "PD_R_KERB"), (args.r_prog, "PO_R_PROG"), (args.r_fast, "PD_R_FAST"),
+                      (args.r_slow, "PD_R_SLOW"), (args.exempt, "PO_EXEMPT"), (args.kick_p, "PO_KICK_P"),
+                      (args.free_off_t, "FORMULA_FREE_OFF_T")):
         if flag is not None:
             os.environ[env] = str(flag)
     if args.reward:

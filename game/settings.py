@@ -37,10 +37,17 @@ class Settings:
     pen_track_limits: bool = True     # cutting a corner, running wide
     pen_collision: bool = True        # causing a collision
     pen_yellow: bool = True           # overtaking or speeding under yellow
+    #: Manual gearbox for the player's car (paddles / E and Z); off = automatic.
+    manual_gearbox: bool = False
+    #: Steering wheel sensitivity: 1.0 = lock to lock as the wheel is set in
+    #: Pit House; higher reaches full steering with less turn of the wheel.
+    steer_sens: float = 1.0
 
 
 #: (field, title, what it does) in the order of the settings screen.
 ROWS = (
+    ("manual_gearbox", "MANUAL GEARBOX", "shift yourself: wheel paddles or E / Z; the engine cuts out at the rev limiter"),
+    ("steer_sens", "STEERING SENSITIVITY", "wheel only: more = less turn of the wheel for the same steering (0.5x - 4.0x)"),
     ("auto_steer", "AUTO STEERING", "the car steers along the line; steer yourself (A / D) any time to take over, Q back to the line"),
     ("auto_pedals", "AUTO PEDALS", "throttle and brake are automatic until you press W / S yourself"),
     ("yellow_flags", "YELLOW FLAGS", "a stricken car brings out a yellow and everyone slows down"),
@@ -62,7 +69,9 @@ def apply(d: dict | None) -> None:
     """Take the values in *d* (unknown keys ignored) as the current settings."""
     for f in fields(Settings):
         if d and f.name in d:
-            setattr(current, f.name, bool(d[f.name]))
+            v = d[f.name]
+            setattr(current, f.name,
+                    min(4.0, max(0.5, float(v))) if f.type in (float, "float") else bool(v))
 
 
 def load() -> None:

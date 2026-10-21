@@ -12,6 +12,8 @@ from . import assist as assist_mod
 from . import config, grandprix, settings, teams
 from . import palette as pal
 from . import post
+from . import mozaleds
+from . import wheel as wheel_mod
 from .car import Car, lerp_pose
 from .freecam import FreeCam
 from .ghost import Ghost
@@ -707,7 +709,12 @@ class Game:
         self._aim_camera()
 
     # -- input ----------------------------------------------------
+    def _manual_on(self) -> bool:
+        st = settings.current
+        return st.manual_gearbox and not st.auto_pedals
+
     def read_controls(self) -> Controls:
+        self.vehicle.manual = self._manual_on()
         if self.state == COUNTDOWN:
             return Controls()
         if self.freecam.enabled:
@@ -725,6 +732,16 @@ class Game:
                 (held_keys["a"] or held_keys["left arrow"])
         ctl = Controls(throttle=float(up), brake=float(down),
                        steer=float(steer), handbrake=bool(held_keys["space"]))
+        # Steering wheel + pedals (MOZA etc.): analogue values; a key that is
+        # held still wins so the keyboard keeps working with the wheel plugged in.
+        wh = wheel_mod.shared()
+        if wh.connected:
+            if not (up or down):
+                ctl.throttle, ctl.brake = wh.throttle, wh.brake
+            if not steer:
+                ctl.steer = max(-1.0, min(1.0, wh.steer * settings.current.steer_sens))
+                ctl.analog_steer = True
+            ctl.handbrake = ctl.handbrake or wh.pressed("handbrake")
         if self.assist is not None:
             cap = math.inf
             if self.assist.pedals and self.gp is not None:
@@ -798,6 +815,9 @@ class Game:
             self.world.destroy()
 
     def on_key(self, key: str):
+        if key in ("e", "z", "gear up", "gear down") and self.vehicle.manual:
+            self.vehicle.shift(1 if key in ("e", "gear up") else -1)
+            return
         if key == "f":
             on = self.freecam.toggle()
             # The car is hidden in the bonnet view; flying away from it with
@@ -1121,7 +1141,9 @@ class Game:
         self.impacts.muted = self.muted
         self.impacts.scrape(self.vehicle.speed, scraped, dt)
         self.sound.update(heard.speed, config.MAX_SPEED,
-                          throttle, dt, muted=self.muted)
+                          throttle, dt, muted=self.muted,
+                          revs=(heard.revs_in(heard.gear, heard.speed)
+                                if heard is self.vehicle and self._manual_on() else None))
         post.update(min(1.0, heard.speed / config.MAX_SPEED), dt)
         self._draw_hud(i)
 
@@ -1368,7 +1390,14 @@ class Game:
         dots = None
         if self.gp is not None:
             dots = [(p.pos, self._dot_col[k]) for k, p in self.gp.proxies.items()]
+        man = self._manual_on() and not spectating
+        leds = mozaleds.shared()
+        if leds is not None:
+            leds.set_fraction(self.hud._rpm if not spectating else 0.0,
+                              blink=self.hud._rpm > 0.97)
         self.hud.update(
+            manual_gear=v.gear if man else None,
+            manual_revs=v.revs_in(v.gear, v.speed) if man else 0.0,
             assist_view=self.assist.view() if self.assist is not None else None,
             speed_kmh=v.speed * 3.6,
             speed_frac=min(1.0, v.speed / config.MAX_SPEED),
@@ -1822,6 +1851,8 @@ def update():
     global TRANSITION
     from .recorder import RECORDER
     RECORDER.tick()
+    for k in wheel_mod.poll_keys(menu=MENU is not None):     # wheel buttons act as key presses
+        input(k)
     if TRANSITION is not None:
         TRANSITION.tick()
         if TRANSITION.done:

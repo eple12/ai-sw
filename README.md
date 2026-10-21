@@ -141,3 +141,21 @@ data/                  서킷 데이터 (f1tenth_racetracks)
 - 타이어 온도·마모·연료·피트스톱이 없다.
 - 서킷 이름·팀 이름은 가상이거나 실제 서킷명을 그대로 쓴다. 트랙 데이터는 f1tenth_racetracks(MIT), 일부 도로변 모델은 Kenney Racing Kit(CC0)이다
   (`assets/models/kenney/LICENSE.txt`).
+
+## 스티어링 휠 (MOZA 등)
+
+Windows에 연결된 DirectInput 휠·페달을 자동으로 인식한다(추가 패키지·Pit House 불필요). 축·버튼 매핑은
+`wheel.json`(기본: 핸들 X, 스로틀 Z, 브레이크 R, 핸드브레이크 버튼 1)에서 바꾸고,
+`python tools/wheel_probe.py`로 어떤 축·버튼이 움직이는지 볼 수 있다.
+
+| 휠 | 동작 |
+|---|---|
+| A / B | Enter / 핸드브레이크(메뉴에선 뒤로) |
+| 십자키 | 방향키 |
+| 시프트 패들 | 수동 변속 (설정에서 MANUAL GEARBOX) |
+| 홈 | 일시정지 |
+| CAM 탭 | 카메라 전환 |
+| CAM 누른 채 + A/B/X/Y/십자/패들 | R / M / H / T / O·G·F·P / Q·F9 |
+
+설정(`O`)의 STEERING SENSITIVITY로 휠 감도를 0.5x~4.0x로 조절한다. RPM LED는 `wheel.json`의 `"leds": true`로 켜며
+Pit House를 종료해야 한다(같은 시리얼 포트를 쓴다).

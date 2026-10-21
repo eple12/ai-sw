@@ -913,6 +913,9 @@ DRIVE_AI_POLICY = ASSET_DIR / "policies" / "drivenet.npz"
 # them. (FORMULA_ONE_AI / FORMULA_ONE_AI_POLICY set it from the environment.)
 ONE_AI = os.environ.get("FORMULA_ONE_AI", "rl")
 ONE_AI_POLICY = os.environ.get("FORMULA_ONE_AI_POLICY") or ASSET_DIR / "policies" / "onenet.npz"
+# At the top difficulty: the network trained with no speed to keep to (used when this
+# file is there).
+ONE_AI_TOP_POLICY = os.environ.get("FORMULA_ONE_AI_TOP_POLICY") or ASSET_DIR / "policies" / "onenet_top.npz"
 # Seconds a race control message about the player stays up (others: 60%).
 # Under a yellow flag every car, the player's included, keeps below this speed
 # for the stretch the flag covers (racecontrol.py judges it, racecraft.py drives

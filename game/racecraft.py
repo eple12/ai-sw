@@ -35,6 +35,7 @@ The layers, each measured in ``tools/race_sim.py`` before it stayed:
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass
 
 import numpy as np
@@ -66,6 +67,9 @@ GAP_ALONG = config.CAR_BODY_LENGTH + 1.5
 GAP_ACROSS = config.CAR_BODY_WIDTH + 0.6
 #: A car this close ahead (m) in the lane, with the car below its own pace, holds it up.
 HELD_GAP = 30.0
+#: Seconds all four wheels may be beyond the white line before the recovery routine takes
+#: a free (network-driven) car over.
+FREE_OFF_T = float(os.environ.get("FORMULA_FREE_OFF_T", 0.6))
 #: Wheel centres kept this far inside the white line by a lane.
 EDGE_ROOM = config.WHEEL_HALF_TRACK + 0.25
 #: Decelerations the planner assumes it can count on (m/s^2) -- less on the
@@ -1374,7 +1378,10 @@ class RaceDriver:
         queued = self.leader is not None
         self.slow_t = self.slow_t + dt if (me.v < 3.0 and not queued) else 0.0
         head = self._heading_err(vehicle, me)
-        why = ("off" if self.off_t > 0.6 else "slow" if self.slow_t > 1.0
+        # A network that drives itself is given time to bring the car back on the
+        # road (it is rewarded for it); the recovery routine is the fallback.
+        off_limit = FREE_OFF_T if self._modes()[0] else 0.6
+        why = ("off" if self.off_t > off_limit else "slow" if self.slow_t > 1.0
                else "spun" if abs(head) > 1.2 and me.v < 30.0 else "")
         if why:
             self.rec_cause = why

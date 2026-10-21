@@ -972,7 +972,7 @@ class HUD:
         self.t_mode.set("TIME" if self.quali else
                         "LEADER" if gap_mode == "leader" else "INTERVAL")
 
-    def update(self, *, speed_kmh, speed_frac, lap, cur_t, last_t, best_t,
+    def update(self, *, manual_gear=None, manual_revs=0.0, speed_kmh, speed_frac, lap, cur_t, last_t, best_t,
                session_t, sectors, standings, lights=-1, gantry_dy=0.0,
                flag="", spectating=False, car_xz=None, ghost_xz=None,
                throttle=0.0, brake=0.0, steer=0.0, slip=0.0, tc_cut=0.0,
@@ -1064,8 +1064,10 @@ class HUD:
         self.s_name.set(me_name)
         self.s_speed.set(f"{max(0.0, speed_kmh):0.0f}"[-3:])
         gear, within = gear_of(speed_frac)
-        self.s_gear.set(str(gear) if speed_kmh > 2.0 else "N")
-        target = 0.25 + 0.75 * within if speed_kmh > 2.0 else 0.0
+        if manual_gear is not None:
+            gear, within = manual_gear, manual_revs
+        self.s_gear.set(str(gear) if speed_kmh > 2.0 or manual_gear else "N")
+        target = 0.25 + 0.75 * within if speed_kmh > 2.0 or manual_gear else 0.0
         self._rpm += (target - self._rpm) * min(1.0, 9.0 * dt)
         lit = int(self._rpm * N_LEDS + 0.5)
         if lit != self._lit:

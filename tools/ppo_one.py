@@ -9,7 +9,13 @@ Both heads learn at once, each from its own stream of reward, on the same trunk:
   the jerk of the controls;
 * the **slow head** (the 24 decision actions, 7.5 Hz, categorical) from the
   racecraft reward of game/raceenv.py (``REWARD``) -- places, held-up time with
-  open road beside, contact, stewards -- exactly what trained the decision policy.
+  open road beside, contact, stewards -- exactly what trained the decision policy;
+  and, with ``--missed``, passes missed: a car held up is probed now and then
+  (game/passoracle.py, ``Judge``) -- copies of the scene run a few seconds ahead
+  with the car trying a lane either side and a dive into the braking zone -- and if
+  one of them got by cleanly while the car itself did not, it pays ``--missed``.
+  ``--slow-w`` mixes in the scene those chances come up in most (raceenv ``slow``:
+  a car crawling out of a corner).
 
 Every AI car of a scene is driven by the net; each keeps its own trajectory. Two
 critics (one per stream). The start is held in place by a pull of each head
@@ -39,8 +45,28 @@ TRAIN_KINDS = {"start": 0.25, "race": 0.15, "pack": 0.15, "sbs": 0.10, "defend":
                "tow": 0.18, "merge": 0.05}
 HORIZON = {"race": 100.0}
 GAMMA_F, LAM = 0.995, 0.95
+#: Reward per metre driven (the speed is the car's own business: there is no speed
+#: to keep to), and whether slowing for a car close ahead is exempt from the
+#: slowness term (0: not).
+R_PROG = float(os.environ.get("PO_R_PROG", 0.0))
+EXEMPT = int(os.environ.get("PO_EXEMPT", 1))
+#: Share of episodes in which some cars are thrown off the road (and the metres
+#: beyond the white line they land).
+KICK_P = float(os.environ.get("PO_KICK_P", 0.0))
 GAMMA_S = 0.99
 DT = 1.0 / 60.0
+#: The scenes the missed-pass judge watches, how often it may probe a car (s), the
+#: seconds a probe looks ahead (and a car has to make good a pass found), and the
+#: most probes per episode (each costs a few seconds of simulation per way).
+JUDGE_KINDS = tuple(os.environ.get("PO_JUDGE_KINDS", "slow,tow,race").split(","))
+JUDGE_EVERY = float(os.environ.get("PO_JUDGE_EVERY", 2.0))
+JUDGE_H = float(os.environ.get("PO_JUDGE_H", 8.0))
+JUDGE_MAX = int(os.environ.get("PO_JUDGE_MAX", 12))
+#: Difficulty levels (teams.DIFFICULTY) the grid scenes (``start``, ``race``) are
+#: drawn from in training: a level is the field's pace, which the net reads as its
+#: speed target, so the lower ones are learnt only if they are driven. The other
+#: scenes set their cars' pace themselves; evaluation stays at the top level.
+LEVELS = tuple(int(x) for x in os.environ.get("PO_LEVELS", "6").split(","))
 
 
 # --------------------------------------------------------------------------
@@ -95,27 +121,43 @@ class Hook:
         return a
 
 
-def _scenario(circuit, kind, seed):
-    """A scene with every AI car an ego (the net drives them all)."""
+def _scenario(circuit, kind, seed, level=6):
+    """A scene with every AI car an ego (the net drives them all) but the ones
+    the scene keeps as they are (``Scenario.fixed``)."""
     from game import config, grandprix, raceenv
     config.DRIVE_AI = "rules"
     if kind == "race":
-        fld = grandprix.build(raceenv.track_of(circuit), 6, 3, seed, player=False)
+        fld = grandprix.build(raceenv.track_of(circuit), level, 3, seed, player=False)
         fld.lights_out()
         fld.views = fld._views()
         sc = raceenv.Scenario(circuit, "race", seed, fld, [], 0, 1e12, HORIZON["race"])
     else:
-        sc = raceenv.make_scenario(circuit, kind, seed)
-    sc.egos = [i for i, e in enumerate(sc.fld.cars) if e.driver is not None]
+        sc = raceenv.make_scenario(circuit, kind, seed, level=level)
+    sc.egos = [i for i, e in enumerate(sc.fld.cars) if e.driver is not None and i not in sc.fixed]
     return sc
+
+
+def _kick(fld, i, rng):
+    """Throw car *i* off the road: beyond a white line, at an angle, slower."""
+    from game import raceenv
+    e = fld.cars[i]
+    me = fld.views[i]
+    k = fld.frame.node(me.s)
+    side = 1.0 if rng.random() < 0.5 else -1.0
+    edge = float(fld.track.w_right[k] if side > 0 else fld.track.w_left[k])
+    raceenv._place(fld, e, me.s, 0.0, lateral_abs=side * (edge + float(rng.uniform(1.5, 5.0))),
+                   yaw_off=float(rng.normal(0.0, 0.5)), speed=float(rng.uniform(8.0, 28.0)))
 
 
 def rollout(args):
     w, sigma, T, circuit, kind, seed, sample = args
-    from game import drivenet, onenet, raceenv
+    from game import drivenet, onenet, passoracle, raceenv
     rng = np.random.default_rng(seed)
     net = onenet.OneNet(w)
-    sc = _scenario(circuit, kind, seed)
+    level = 6
+    if sample and kind in ("start", "race"):
+        level = int(LEVELS[int(rng.integers(len(LEVELS)))])
+    sc = _scenario(circuit, kind, seed, level)
     env = raceenv.RaceEnv(sc)
     env.reset()
     fld = env.fld
@@ -127,15 +169,30 @@ def rollout(args):
         d.follow.drive = h
         d.policy = onenet.OnePolicy(h)
         hooks[i] = h
+    judge = None
+    if raceenv.REWARD["missed"] != 0.0 and kind in JUDGE_KINDS:
+        # Copies are driven greedily by the net as it stands, not by the hooks.
+        judge = passoracle.Judge(sc.egos, net=net, every=JUDGE_EVERY, horizon=JUDGE_H,
+                                 max_probes=JUDGE_MAX)
+        env.judge = judge
     v1 = drivenet.OBS_DIM_V1
     stats = dict(rec=0, hits=0, n=0, kerb2=0, off=0)
     parts_sum = {}
     plan_every = fld.frame.plan_every
     tick = 0
+    kicks = []
+    if sample and KICK_P > 0.0 and rng.random() < KICK_P and kind in ("start", "race", "pack"):
+        for i in rng.permutation(sc.egos)[:max(1, len(sc.egos) // 6)]:
+            kicks.append((float(rng.uniform(4.0, 14.0)), int(i)))
     while fld.t < sc.max_t:
         fld.step(DT)
         env.ref.update()
+        if judge is not None:
+            judge.update(fld)
         tick += 1
+        while kicks and fld.t >= kicks[0][0]:
+            _, ki = kicks.pop(0)
+            _kick(fld, ki, rng)
         for i, h in hooks.items():
             e = fld.cars[i]
             d = e.driver
@@ -154,13 +211,13 @@ def rollout(args):
             x = h.last_x
             err = abs(float(x[0])) * 3.0
             dv = min(float(x[13]) * 15.0, float(x[14]) * 20.0)
-            if x[v1 + 4] > 0.5 and x[v1] < 0.8:
+            if EXEMPT and x[v1 + 4] > 0.5 and x[v1] < 0.8:
                 dv = 0.0                  # a car close ahead in the way: slowing for it is not slowness
             r = -pdv.R_RECOVERY * drec - pdv.R_HIT * dhit
             r -= DT * (pdv.R_OFF * (not on) + pdv.R_KERB * (gs < 0.9) + pdv.R_KERB1 * (gs < 0.98)
                        + pdv.R_ERR * max(err - 1.0, 0.0) ** 2
                        + (pdv.R_SLOW * dv if dv > 0.0 else pdv.R_FAST * -dv))
-            h.fr[-1] += r
+            h.fr[-1] += r + R_PROG * float(e.vehicle.speed) * DT
         if tick % plan_every == 0:
             rewards, parts = env.reward_step()
             for i, h in hooks.items():
@@ -180,10 +237,13 @@ def rollout(args):
                          (np.asarray(h.dx, np.float32), np.asarray(h.da, np.int64),
                           np.asarray(h.dlp, np.float32), np.asarray(h.dr, np.float32))))
     n = max(stats["n"], 1)
-    info = {"kind": kind, "circuit": circuit, "cars": n_cars,
+    info = {"kind": kind, "circuit": circuit, "cars": n_cars, "level": level,
             "rec_per_car": stats["rec"] / n_cars, "hits": stats["hits"] / 2.0,
             "off_pct": 100.0 * stats["off"] / n, "kerb2_pct": 100.0 * stats["kerb2"] / n,
             "queue_pct": queue_pct, "passes": len(ref.passes), "pen_s": pens,
+            "chances": judge.chances if judge else 0, "taken": judge.taken if judge else 0,
+            "missed": sum(judge.missed.values()) if judge else 0,
+            "probes": judge.probes if judge else 0,
             "t": fld.t, "ret_f": float(sum(t[0][3].sum() for t in traj) / max(len(traj), 1)),
             "ret_s": float(sum(t[1][3].sum() for t in traj) / max(len(traj), 1)),
             "parts": parts_sum}
@@ -210,13 +270,15 @@ def summarise(infos):
     for kind in sorted({i["kind"] for i in infos}):
         rs = [i for i in infos if i["kind"] == kind]
         out[kind] = {k: float(np.mean([r[k] for r in rs]))
-                     for k in ("rec_per_car", "hits", "off_pct", "kerb2_pct", "queue_pct", "passes", "pen_s")}
+                     for k in ("rec_per_car", "hits", "off_pct", "kerb2_pct", "queue_pct", "passes", "pen_s",
+                               "chances", "taken", "missed")}
     return out
 
 
 def fmt(s):
     return "  ".join(f"{k}: rec/car {v['rec_per_car']:.2f} hits {v['hits']:.1f} pass {v['passes']:.1f} "
                      f"queue {v['queue_pct']:.1f}% pen {v['pen_s']:.0f}s off {v['off_pct']:.2f}% kerb2 {v['kerb2_pct']:.1f}%"
+                     + (f" missed {v['missed']:.1f}/{v['chances']:.1f}" if v.get("chances") else "")
                      for k, v in s.items())
 
 
@@ -224,7 +286,8 @@ def score(ev):
     """Higher is better: passing for it, contact, recoveries, penalties and being
     held up against it (per scene, averaged over kinds)."""
     return float(np.mean([v["passes"] / 3.0 - 0.5 * v["hits"] - 5.0 * v["rec_per_car"]
-                          - 0.05 * v["pen_s"] - 0.1 * v["queue_pct"] for v in ev.values()]))
+                          - 0.05 * v["pen_s"] - 0.1 * v["queue_pct"] - 0.5 * v.get("missed", 0.0)
+                          for v in ev.values()]))
 
 
 def main():
@@ -248,6 +311,11 @@ def main():
     ap.add_argument("--eval-every", type=int, default=5)
     ap.add_argument("--eval-seeds", type=int, default=1)
     ap.add_argument("--eval-circuits", nargs="*", default=list(dd.EVAL_CIRCUITS))
+    ap.add_argument("--eval-kinds", nargs="*", default=["start", "race"])
+    ap.add_argument("--missed", type=float, default=None,
+                    help="reward per pass missed (raceenv REWARD['missed']; e.g. -3); turns the judge on")
+    ap.add_argument("--slow-w", type=float, default=None, help="share of episodes in the slow scene")
+    ap.add_argument("--levels", default=None, help='difficulty levels the grid scenes are drawn from, e.g. "3,4,5,6"')
     ap.add_argument("--seed0", type=int, default=500000)
     ap.add_argument("--max-hours", type=float, default=0.0)
     ap.add_argument("--resume", action="store_true")
@@ -256,13 +324,25 @@ def main():
     ap.add_argument("--r-rec", type=float, default=None)
     ap.add_argument("--r-off", type=float, default=None)
     ap.add_argument("--r-kerb", type=float, default=None)
+    ap.add_argument("--r-prog", type=float, default=None, help="reward per metre driven")
+    ap.add_argument("--r-fast", type=float, default=None, help="penalty per m/s over the plan's speed")
+    ap.add_argument("--r-slow", type=float, default=None, help="penalty per m/s under it")
+    ap.add_argument("--exempt", type=int, default=None, help="1: slowing for a car close ahead costs nothing")
+    ap.add_argument("--kick-p", type=float, default=None, help="share of episodes with cars thrown off the road")
+    ap.add_argument("--free-off-t", type=float, default=None,
+                    help="seconds off the road before the recovery routine takes over")
     args = ap.parse_args()
     for flag, env in ((args.r_hit, "PD_R_HIT"), (args.r_rec, "PD_R_REC"), (args.r_off, "PD_R_OFF"),
-                      (args.r_kerb, "PD_R_KERB")):
+                      (args.r_kerb, "PD_R_KERB"), (args.r_prog, "PO_R_PROG"), (args.r_fast, "PD_R_FAST"),
+                      (args.r_slow, "PD_R_SLOW"), (args.exempt, "PO_EXEMPT"), (args.kick_p, "PO_KICK_P"),
+                      (args.free_off_t, "FORMULA_FREE_OFF_T"), (args.levels, "PO_LEVELS")):
         if flag is not None:
             os.environ[env] = str(flag)
-    if args.reward:
-        os.environ["RACEAI_REWARD"] = args.reward
+    rw =json.loads(args.reward) if args.reward else {}
+    if args.missed is not None:
+        rw["missed"] = args.missed
+    if rw:
+        os.environ["RACEAI_REWARD"] = json.dumps(rw)
 
     import torch
     import torch.nn as nn
@@ -307,14 +387,18 @@ def main():
         return d1.weights_of(pi, out / "_cur.npz")
 
     rng = np.random.default_rng(args.seed0 + it0)
-    kinds, kp = list(TRAIN_KINDS), np.array(list(TRAIN_KINDS.values()))
+    train_kinds = TRAIN_KINDS
+    if args.slow_w:
+        train_kinds = {**{k: v * (1.0 - args.slow_w) for k, v in TRAIN_KINDS.items() if k != "slow"},
+                       "slow": args.slow_w}
+    kinds, kp = list(train_kinds), np.array(list(train_kinds.values()))
     kp = kp / kp.sum()
     log = open(out / "ppo_log.jsonl", "a", encoding="utf-8")
     t_start = time.time()
     with ProcessPoolExecutor(max_workers=args.jobs, mp_context=mp.get_context("spawn")) as ex:
 
         def evaluate(w):
-            tasks = [(w, 0.0, 1.0, c, k, s, False) for c in args.eval_circuits for k in ("start", "race")
+            tasks = [(w, 0.0, 1.0, c, k, s, False) for c in args.eval_circuits for k in args.eval_kinds
                      for s in range(args.eval_seeds)]
             return summarise([r[1] for r in ex.map(rollout, tasks, chunksize=1)])
 
@@ -429,6 +513,9 @@ def main():
                    "hits": float(np.mean([i["hits"] for i in infos])),
                    "queue_pct": float(np.mean([i["queue_pct"] for i in infos])),
                    "passes": float(np.mean([i["passes"] for i in infos])),
+                   "chances": int(sum(i["chances"] for i in infos)),
+                   "taken": int(sum(i["taken"] for i in infos)),
+                   "missed": int(sum(i["missed"] for i in infos)),
                    "off_pct": float(np.mean([i["off_pct"] for i in infos])),
                    "roll_s": round(t_roll, 1), "iter_s": round(time.time() - t0, 1),
                    **{k: round(v, 4) for k, v in stats.items()}}
@@ -448,7 +535,8 @@ def main():
             log.flush()
             print(f"it {it + 1:4d}  n {nf:7d}/{ns:6d}  ret {rec['ret_f']:7.2f}/{rec['ret_s']:7.2f}  "
                   f"rec/car {rec['rec_per_car']:.2f}  hits {rec['hits']:.1f}  pass {rec['passes']:.1f}  "
-                  f"queue {rec['queue_pct']:.1f}%  off {rec['off_pct']:.2f}%  anchor {stats['anchor']:.4f}  "
+                  f"queue {rec['queue_pct']:.1f}%  off {rec['off_pct']:.2f}%  "
+                  f"missed {rec['missed']}/{rec['chances']} (taken {rec['taken']})  anchor {stats['anchor']:.4f}  "
                   f"kl {stats['kl']:.3f}  {rec['iter_s']:.0f}s", flush=True)
             if "eval" in rec:
                 print("    EVAL  " + fmt(rec["eval"]) + f"  score {rec['score']:.2f}"

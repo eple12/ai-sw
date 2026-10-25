@@ -5,3 +5,11 @@ selftest.png
 shot_*.png
 # recorded at runtime
 assets/ghosts/*_user*.npz
+
+# promo videos: sources only; footage, renders and project output stay local
+promo/footage*/
+promo/*/assets/
+promo/*/renders/
+promo/*/compositions/
+promo/*/index.html
+promo/*/.hyperframes/

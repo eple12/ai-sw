@@ -13,7 +13,7 @@ from ursina import AmbientLight, DirectionalLight, Ursina, Vec3, application, wi
 
 from game import palette as pal
 from game import settings
-from game.menu import ModeMenu, SettingsMenu
+from game.menu import ControlsMenu, ModeMenu, SettingsMenu
 
 OUT = Path(__file__).resolve().parents[1] / "menu_preview"
 
@@ -27,7 +27,7 @@ def main():
     settings.current.auto_steer = True
     settings.current.drs = False
     menu = {"m": ModeMenu(on_pick=lambda m: None, on_quit=application.quit,
-                          on_settings=lambda: None)}
+                          on_settings=lambda: None, on_controls=lambda: None)}
     state = {"f": 0}
 
     def shoot(name):
@@ -46,7 +46,24 @@ def main():
             menu["m"].on_key("s")
         elif f == 12:
             shoot("settings.png")
-        elif f == 14:
+            menu["m"].destroy()
+            menu["m"] = SettingsMenu(on_back=lambda: None, in_race=True)
+            for _ in range(11):
+                menu["m"].on_key("s")
+        elif f == 17:
+            shoot("settings_race.png")
+        elif f == 19:
+            menu["m"].destroy()
+            menu["m"] = ControlsMenu(on_back=lambda: None)
+        elif f == 22:
+            shoot("controls_kb.png")
+            menu["m"].on_key("d")
+        elif f == 25:
+            shoot("controls_moza.png")
+            menu["m"].on_key("d")
+        elif f == 28:
+            shoot("controls_pad.png")
+        elif f == 30:
             application.quit()
 
     import __main__

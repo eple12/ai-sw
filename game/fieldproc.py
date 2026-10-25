@@ -39,7 +39,7 @@ COLS = ("x", "z", "yaw", "vx", "vz", "yaw_rate", "steer", "lat_accel",
         "long_accel", "downforce", "braking", "ghost", "drs", "racing",
         "progress", "laps", "finish_t", "best", "last", "lap_start",
         "penalty", "on_track", "hits", "strikes", "pos", "interval", "gap",
-        "recover", "s", "total", "stricken")
+        "recover", "s", "total", "stricken", "drs_ok", "drag")
 C = {name: k for k, name in enumerate(COLS)}
 
 DT = 1.0 / 60.0
@@ -64,6 +64,8 @@ def _snapshot(fld, kick_total, messages_from: int):
         r[C["braking"]] = float(e.braking)
         r[C["ghost"]] = float(e.ghost)
         r[C["drs"]] = float(e.drs)
+        r[C["drs_ok"]] = float(e.drs_ok)
+        r[C["drag"]] = float(v.drag_scale)
         view = fld.views[e.idx] if fld.views else None
         r[C["racing"]] = float(view.racing) if view is not None else 0.0
         p = e.limits.progress
@@ -184,11 +186,14 @@ def _worker(conn, setup: dict):
         body = latest[1]
         target = body["t"]
         state = body["player"]
+        fld.drs_req = bool(body.get("drs_req", True))
         kick_applied = np.asarray(body.get("kick_applied", kick_applied), float)
         for ev in events:
             if ev == "go" and not fld.started:
-                fld.lights_out()
+                fld.lights_out(human=True)
                 prev = None
+            elif ev == "jump" and me is not None:
+                fld.jump_start(me)
             elif ev == "reset" and me is not None:
                 fld.reset_external(me)
                 prev = None
@@ -306,7 +311,7 @@ class FieldClient:
     def event(self, name: str):
         self._events.append(name)
 
-    def tick(self, t: float, vehicle, braking: bool):
+    def tick(self, t: float, vehicle, braking: bool, drs_req: bool = True):
         """Ask for the field at session time *t*, with the player's car as
         it is now."""
         st = dict(pos=(float(vehicle.pos[0]), float(vehicle.pos[1])),
@@ -315,7 +320,7 @@ class FieldClient:
                   yaw_rate=float(vehicle.yaw_rate),
                   steer=float(vehicle.steer_angle),
                   on_track=bool(vehicle.on_track), braking=bool(braking))
-        body = {"t": float(t), "player": st,
+        body = {"t": float(t), "player": st, "drs_req": bool(drs_req),
                 "kick_applied": self.kick_applied.tolist(),
                 "events": self._events}
         self._events = []

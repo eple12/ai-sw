@@ -15,8 +15,10 @@ Track limits (all four wheels past the white line):
   time penalty that always outweighs the gain: ``ceil(2 x gain) + 1`` s,
   ``GAIN_PEN`` (5 s) at the least -- the heaviest thing a track-limits trip
   can cost, as in F1; past 10 s, a gross short cut, the gain plus 10 s.
-* **Ran wide, kept going.** A *strike*. Three are warnings (the third shows
-  the black-and-white flag); from the fourth, each costs the level's strike
+* **Quick mistake.** A trip that comes straight back (under ``QUICK_T`` s) and
+  gained under ``QUICK_GAIN`` s is a strike, not a penalty.
+* **Ran wide, kept going.** A *strike*. Five are warnings (the fifth shows
+  the black-and-white flag); from the sixth, each costs the level's strike
   penalty (``teams.Level.strike_pen``: 0 on Novice, where it stays a warning,
   1 s on Rookie and Amateur, 2 s above) -- always less than a cut's.
 
@@ -43,8 +45,10 @@ incident whoever the geometry points at (the player is told which kind):
 
 What the guilty car gets depends on what it did to the other one: if the
 victim spun, went off or needed recovering within ``CONSEQUENCE_T`` seconds,
-or the hit was heavy, a 5 s penalty; a light touch with no consequence is a
-warning, and only a repeat (on levels that say so) is penalised -- and on
+or the hit was heavy, a 5 s penalty; a light touch with no consequence -- however hard -- is a
+warning (``COLLISION_FREE`` of them), and only a repeat (on levels that say
+so) is penalised; one that looks on purpose (steering into the other car,
+ramming its back) is penalised at once -- and on
 the opening lap, where the whole field shares one braking zone, not even
 that. Racing incidents get no action, and the player is told so, so a
 contact never leaves them wondering whether a penalty is coming.
@@ -76,14 +80,18 @@ EXCUSE_T = 1.5
 #: Seconds a trip has to save before it is "gaining an advantage", and the
 #: least that costs. (Smaller trips are strikes, and cost
 #: a strike's penalty once the free ones are used.)
-GAIN_MIN = 0.20
+GAIN_MIN = 1.2
 GAIN_PEN = 5.0
+#: A quick trip off that comes straight back (under QUICK_T seconds) and gained
+#: less than QUICK_GAIN seconds is a mistake, not a short cut: a warning only.
+QUICK_T = 4.0
+QUICK_GAIN = 2.5
 #: A trip that ends slower than this share of the speed it began at, or lasts
 #: longer than this, was a mistake that cost time, not a short cut.
 LOST_SPEED = 0.55
 LOST_T = 5.0
 #: Strikes that are warnings before the strike penalty applies.
-STRIKES_FREE = 3
+STRIKES_FREE = 5
 #: Collision judgement: closing speed (m/s) for a rear-ending, and the
 #: across-the-road speed (m/s) that makes a car the one moving into another.
 REAR_CLOSING = 3.0
@@ -92,7 +100,17 @@ SIDE_MARGIN = 0.8
 #: Seconds the victim of a contact is watched for its consequences, and the
 #: impulse (N*s) that is serious whatever happens next.
 CONSEQUENCE_T = 3.0
-HEAVY_IMPULSE = 4500.0
+HEAVY_IMPULSE = 9000.0
+#: Contact that looks on purpose is penalised whatever followed: steering into
+#: the other car faster than DELIBERATE_SPEED (m/s across the road), or a
+#: rear-ending at more than DELIBERATE_CLOSING (m/s), with at least
+#: DELIBERATE_IMPULSE (N*s) in it.
+DELIBERATE_SPEED = 3.0
+DELIBERATE_CLOSING = 10.0
+DELIBERATE_IMPULSE = 2500.0
+#: Light touches that are only warnings, per car, before a repeat costs a
+#: penalty (on the levels that penalise repeats).
+COLLISION_FREE = 2
 #: One judgement per pair of cars per incident: contacts this close together
 #: are the same one.
 PAIR_GAP_T = 2.0
@@ -142,6 +160,7 @@ class _Pending:
     impulse: float
     reason: str
     escalated: bool = False
+    deliberate: bool = False
 
 
 class RaceControl:
@@ -182,7 +201,7 @@ class RaceControl:
         if exc.t0 - rec.last_contact < EXCUSE_T:
             return                                     # pushed off
         gain = exc.gained_s
-        if gain >= GAIN_MIN:
+        if gain >= GAIN_MIN and not (gain < QUICK_GAIN and exc.duration < QUICK_T):
             secs = float(max(math.ceil(2.0 * gain) + 1, GAIN_PEN))
             if secs > 10.0:
                 # A gross short cut: everything it gained back, and ten more.
@@ -238,7 +257,26 @@ class RaceControl:
             self.messages.append(Message(t, a, f"CONTACT  ·  {why}  ·  RACING INCIDENT  ·  "
                                          "NO FURTHER ACTION", "clear", b))
             return
-        self._pending.append(_Pending(t, fault, victim, impulse, reason))
+        p = _Pending(t, fault, victim, impulse, reason)
+        p.deliberate = self._deliberate(fault, a, b, sa, sb, gap, lat, impulse)
+        if p.deliberate:
+            p.reason = "DELIBERATE CONTACT"
+        self._pending.append(p)
+
+    @staticmethod
+    def _deliberate(fault, a, b, sa, sb, gap, lat, impulse) -> bool:
+        """A hit that looks on purpose: the guilty car steered hard into the
+        other, or drove into its back at a big closing speed."""
+        if impulse < DELIBERATE_IMPULSE:
+            return False
+        if abs(gap) > 0.5 * config.CAR_BODY_LENGTH:
+            behind, ahead = (a, b) if gap > 0.0 else (b, a)
+            sbh, sah = (sa, sb) if behind == a else (sb, sa)
+            return behind == fault and sbh["v_along"] - sah["v_along"] > DELIBERATE_CLOSING
+        side = 1.0 if lat >= 0.0 else -1.0
+        a_in = sa["v_across"] * side
+        b_in = -sb["v_across"] * side
+        return (a_in if fault == a else b_in) > DELIBERATE_SPEED
 
     @staticmethod
     def _unavoidable(t: float, fault: int, other: int, s_fault: dict,
@@ -322,7 +360,7 @@ class RaceControl:
         keep = []
         for p in self._pending:
             hurt = trouble[p.victim]
-            if hurt or p.impulse >= HEAVY_IMPULSE:
+            if hurt or p.deliberate or p.impulse >= HEAVY_IMPULSE:
                 self._penalise(p.t, p.fault, COLLISION_PEN, p.reason, p.victim)
                 continue
             if t - p.t < CONSEQUENCE_T:
@@ -334,7 +372,7 @@ class RaceControl:
                 continue
             rec = self.cars[p.fault]
             rec.collision_warnings += 1
-            if rec.collision_warnings > 1 and self.minor_repeat_pen:
+            if rec.collision_warnings > COLLISION_FREE and self.minor_repeat_pen:
                 self._penalise(p.t, p.fault, COLLISION_PEN, p.reason, p.victim)
             else:
                 self.messages.append(Message(t, p.fault, "WARNING  ·  " + p.reason,

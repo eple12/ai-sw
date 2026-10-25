@@ -913,6 +913,9 @@ DRIVE_AI_POLICY = ASSET_DIR / "policies" / "drivenet.npz"
 # them. (FORMULA_ONE_AI / FORMULA_ONE_AI_POLICY set it from the environment.)
 ONE_AI = os.environ.get("FORMULA_ONE_AI", "rl")
 ONE_AI_POLICY = os.environ.get("FORMULA_ONE_AI_POLICY") or ASSET_DIR / "policies" / "onenet.npz"
+# At the top difficulty: the network trained with no speed to keep to (used when this
+# file is there).
+ONE_AI_TOP_POLICY = os.environ.get("FORMULA_ONE_AI_TOP_POLICY") or ASSET_DIR / "policies" / "onenet_top.npz"
 # Seconds a race control message about the player stays up (others: 60%).
 # Under a yellow flag every car, the player's included, keeps below this speed
 # for the stretch the flag covers (racecontrol.py judges it, racecraft.py drives
@@ -939,6 +942,15 @@ WALL_RESTITUTION = 0.35
 # which is backwards. Capping the tangential impulse by the normal one makes a
 # square impact expensive and a graze cheap, on its own.
 WALL_FRICTION = 0.55
+
+# The beginner's track-limit guard (settings.edge_guard): a wall along the white
+# line that the car cannot go beyond with all four wheels. It stops the car and
+# slides it along the line without bouncing it or spinning it, and scrubs less
+# than a barrier does. A car found further beyond the line than
+# EDGE_GUARD_MAX_DEPTH (put there by a recovery, a spin before the guard was on)
+# is left to the barrier rather than hauled back.
+EDGE_GUARD_FRICTION = 0.25
+EDGE_GUARD_MAX_DEPTH = 4.0
 
 # ---------------------------------------------------------------------------
 # Camera -- tuned for perceived speed, not for a pretty static shot
@@ -1620,6 +1632,8 @@ FULLSCREEN = False
 # The REC marker (top right) is part of the picture; turn it off for a clean
 # video if you will remember that you are recording.
 REC_KEY = "f9"
+#: Screen recording is switched off for now (no key, no wheel / pad button).
+REC_ENABLED = False
 REC_FPS = 60
 REC_BITRATE_MBPS = 30.0        # 1080p60 of this game: ~220 MB a minute
 REC_INDICATOR = True

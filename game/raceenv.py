@@ -43,11 +43,14 @@ KINDS = ("tow", "sbs", "defend", "merge", "pack")
 #: ``start`` is the opening lap's first seconds -- the whole grid launching at
 #: lights out into the first braking zone, where half of a race's recoveries
 #: and contacts happen. Twenty cars, so it is slow to run and rarely measured.
-TRAIN_KINDS = KINDS + ("start",)
-N_CARS = {"tow": 2, "sbs": 2, "defend": 2, "merge": 5, "pack": 8, "start": 20}
+#: ``slow`` is a car crawling out of a corner -- far below the pace of the cars
+#: behind it, as after an incident -- with one right behind it and a few more
+#: behind that: the scene of queueing behind a car that could be passed.
+TRAIN_KINDS = KINDS + ("start", "slow")
+N_CARS = {"tow": 2, "sbs": 2, "defend": 2, "merge": 5, "pack": 8, "start": 20, "slow": 5}
 #: Longest an episode runs (s), and how far past the corner a pass is judged (m).
 MAX_T = {"tow": 40.0, "sbs": 30.0, "defend": 40.0, "merge": 28.0, "pack": 40.0,
-         "start": 26.0}
+         "start": 26.0, "slow": 30.0}
 PAST_ZONE = 250.0
 
 REWARD = {
@@ -63,6 +66,8 @@ REWARD = {
     "queue": -2.0,         # per second held up behind a car with open road beside
     # Riding the kerb is the racing line's own business, not a fault.
     "kerb": 0.0,           # per second with two wheels or more on the kerb or beyond
+    # A pass the physics said was there (passoracle.Judge), not made in time.
+    "missed": 0.0,         # per missed pass
 }
 
 if os.environ.get("RACEAI_REWARD"):
@@ -76,6 +81,11 @@ TOW_LEAD = (0.94, 0.97)
 #: Where the tow scene starts: metres before the braking zone, and the gap (m).
 TOW_START = 450.0
 TOW_GAP = (10.0, 35.0)
+#: The slow scene: the crawling car's pace (of its plan), the gap to the car
+#: right behind it (m), and how far past the corner's slowest point it starts (m).
+SLOW_PACE = (0.5, 0.95)
+SLOW_GAP = (8.0, 30.0)
+SLOW_EXIT = 60.0
 
 _TRACKS: dict = {}
 
@@ -107,6 +117,9 @@ class Scenario:
     goal: float                     # metres of progress after which it is over
     max_t: float
     start_progress: dict = field(default_factory=dict)
+    #: Cars that drive as the game has them, never trained (a trainer leaves
+    #: them out of its egos).
+    fixed: list = field(default_factory=list)
 
 
 def _straight_before(driver, z: int, limit: float = 600.0) -> float:
@@ -147,12 +160,30 @@ def _place(fld, e, s: float, n_off: float, speed_frac: float = 0.97,
     e.limits.update(DT, k, e.vehicle.pos, False, 0.0, 0.0)
 
 
+def corner_exit(driver, z: int, after: float = SLOW_EXIT) -> float:
+    """Arc length *after* metres past the slowest point of the corner that
+    braking zone *z* leads into."""
+    fr, v = driver.frame, driver.plan.v
+    k, best = z, z
+    for _ in range(400):
+        k = (k + 1) % fr.count
+        if v[k] < v[best]:
+            best = k
+        elif v[k] > v[best] * 1.15:
+            break
+    return (float(fr.arc[best]) + after) % fr.L
+
+
 def make_scenario(circuit: str, kind: str, seed: int, level: int = 6,
-                  ego: int | None = None) -> Scenario:
+                  ego: int | None = None, opts: dict | None = None) -> Scenario:
     """*ego*: which car is the one being driven or measured. Default: the first
     car of each scene, except ``merge`` where it is the first car coming up
     behind the stranded one (the stranded car's own way back onto the road is
-    the rules' recovery, not a decision of this layer)."""
+    the rules' recovery, not a decision of this layer), and ``slow``, where it
+    is the car right behind the crawling one. *opts* fixes what a scene would
+    draw (``slow``: ``zone`` -- an index into the brake zones --, ``pace``,
+    ``gap``)."""
+    opts = opts or {}
     rng = np.random.default_rng(seed * 1000003 + TRAIN_KINDS.index(kind))
     track = track_of(circuit)
     fld = grandprix.build(track, level, 3, seed, player=False, n_cars=N_CARS[kind])
@@ -189,9 +220,29 @@ def make_scenario(circuit: str, kind: str, seed: int, level: int = 6,
         cars[i].driver.skill.pace = p
         cars[i].driver.pace_lap = p
 
-    egos = [1 if kind == "merge" else 0]
+    egos = [1 if kind in ("merge", "slow") else 0]
     goal_arc = az + PAST_ZONE
-    if kind == "tow":
+    if kind == "slow":
+        # Any corner, not only one worth attacking into: the crawl is out of it.
+        bz = list(drv0.brake_zones) or [z]
+        z = int(bz[opts["zone"] % len(bz)] if "zone" in opts else bz[int(rng.integers(len(bz)))])
+        s_l = corner_exit(drv0, z)
+        p_l = float(opts.get("pace", rng.uniform(*SLOW_PACE)))
+        pace(0, p_l)
+        v_l = float(cars[0].driver.plan.v[fr.node(s_l)]) * p_l
+        gap = float(opts.get("gap", rng.uniform(*SLOW_GAP)))
+        _place(fld, cars[0], s_l, 0.0, speed=v_l)
+        _place(fld, cars[1], s_l - gap, 0.0, speed=v_l)
+        for i in range(2, len(cars)):
+            _place(fld, cars[i], s_l - gap - 18.0 * (i - 1), float(rng.uniform(-0.8, 0.8)),
+                   speed=v_l)
+            pace(i, float(rng.uniform(0.985, 1.015)))
+        pace(1, 1.0)
+        az = float(fr.arc[z])
+        goal_arc = s_l + 1e5                         # over on time, not distance
+        #: The crawling car is scenery, not a trainee (see tools/ppo_one.py).
+        fixed = [0]
+    elif kind == "tow":
         s_l = az - TOW_START
         _place(fld, cars[1], s_l, 0.0)
         _place(fld, cars[0], s_l - float(rng.uniform(*TOW_GAP)), 0.0)
@@ -238,6 +289,8 @@ def make_scenario(circuit: str, kind: str, seed: int, level: int = 6,
     fld.views = fld._views()
     goal = 0.0
     sc = Scenario(circuit, kind, seed, fld, egos, z, goal, MAX_T[kind])
+    if kind == "slow":
+        sc.fixed = fixed
     # Progress is only known after a tick has run; the scenario's own reference
     # is where each car starts along the lap.
     for e in cars:
@@ -506,6 +559,8 @@ class RaceEnv:
     def __init__(self, scenario: Scenario | None = None):
         self.sc = scenario
         self.ref = None
+        #: passoracle.Judge whose missed passes the reward counts (None: none).
+        self.judge = None
 
     def reset(self, scenario: Scenario | None = None):
         if scenario is not None:
@@ -528,7 +583,8 @@ class RaceEnv:
                 "hits": e.hits, "events": rc.collision_warnings + len(rc.penalties),
                 "pen": self.fld.rc.penalty(i), "rec": e.driver.recoveries,
                 "strikes": rc.strikes, "target": e.driver.target,
-                "queue": float(self.ref.queue_s[i]), "kerb": float(self.ref.kerb_s[i])}
+                "queue": float(self.ref.queue_s[i]), "kerb": float(self.ref.kerb_s[i]),
+                "missed": self.judge.missed.get(i, 0) if self.judge is not None else 0}
 
     def _obs(self):
         fld = self.fld
@@ -567,6 +623,7 @@ class RaceEnv:
                 "switch": REWARD["switch"] * abs(now["target"] - prev["target"]) / 3.5,
                 "queue": REWARD["queue"] * (now["queue"] - prev["queue"]),
                 "kerb": REWARD["kerb"] * (now["kerb"] - prev["kerb"]),
+                "missed": REWARD["missed"] * (now["missed"] - prev["missed"]),
             }
             parts[i] = p
             rewards[i] = float(sum(p.values()))

@@ -173,6 +173,43 @@ class Surface:
                 total += self._surface_at(d, edge)
         return inside, total / 4.0
 
+    def resolve_limits(self, pos_xz, yaw: float):
+        """The wall of the track limits: with all four wheels beyond the white
+        line, the car's centre moved back far enough that the wheel closest to
+        the road is on the line again.
+
+        Returns ``(corrected centre, unit normal towards the road)``, or None
+        while any wheel is within the limits -- the racing rule, as in ``grip``
+        -- or when the car is further out than ``EDGE_GUARD_MAX_DEPTH``.
+        """
+        cx0, cz0 = float(pos_xz[0]), float(pos_xz[1])
+        sy, cy = math.sin(yaw), math.cos(yaw)
+        ht = config.WHEEL_HALF_TRACK
+        rx, rz = cy * ht, -sy * ht
+        self._local((cx0, cz0))              # refresh the search hint
+        nearest = self.track.nearest_index
+        cl, nl, wr, wl = self._cl, self._nl, self._wr, self._wl
+        least, normal = 1e9, None
+        for along in (config.CG_TO_FRONT, -config.CG_TO_REAR):
+            ax, az = cx0 + sy * along, cz0 + cy * along
+            for px, pz in ((ax + rx, az + rz), (ax - rx, az - rz)):
+                i = nearest((px, pz), self.hint)
+                cx, cz = cl[i]
+                nx, nz = nl[i]
+                offset = (px - cx) * nx + (pz - cz) * nz
+                beyond = abs(offset) - (wr[i] if offset > 0 else wl[i])
+                if beyond <= 0.0:
+                    return None              # a wheel is still inside the line
+                if beyond < least:
+                    least = beyond
+                    normal = (-nx, -nz) if offset > 0 else (nx, nz)
+        if normal is None or least > config.EDGE_GUARD_MAX_DEPTH:
+            return None
+        n = np.array(normal)
+        # A finger inside the line, not exactly on it: the rule is `<=` and the
+        # wheel is found again by a different search next step.
+        return np.array((cx0, cz0)) + n * (least + 0.03), n
+
     def on_track(self, pos_xz, yaw: float | None = None) -> bool:
         """Within track limits. Pass *yaw* to judge it at the wheels."""
         return self.grip(pos_xz, yaw)[0]

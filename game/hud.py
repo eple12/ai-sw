@@ -63,6 +63,8 @@ LAMP_OFF = pal.rgb(44, 12, 12)
 LAMP_ON = pal.rgb(255, 26, 14)
 LAMP_GLOW = pal.rgb(255, 30, 10, 70)
 DRS_GREEN = pal.rgb(40, 200, 90)
+DRS_FLASH = pal.rgb(190, 255, 205)
+DRS_SHUT = pal.rgb(230, 70, 60)
 STRIP_IDLE = pal.rgb(70, 72, 84)
 
 #: Sector bar colour by status. "live" is the sector being driven.
@@ -175,6 +177,7 @@ class HUD:
         self._build_tower()
         self._build_chyron()
         self._build_speed()
+        self._build_drs()
         if assist:
             self._build_assist()
         if config.SHOW_KEY_HINTS:
@@ -393,6 +396,57 @@ class HUD:
                               weight="bold", align="center", cap=1)
         T.label("GEAR", gx + gw / 2, y0 + 0.013, 0.0070, weight="semibold",
                 align="center", col=DIM, track=0.0010)
+
+    # -- DRS (above the telemetry) ------------------------------------------------
+    def _build_drs(self):
+        """A tab over the middle of the telemetry: DRS available (amber, blinking
+        slowly), open (green, with a flash as it opens), just shut (red, briefly)."""
+        D, L = self.D, self.L
+        W, H = 0.170, 0.032
+        x0 = -W / 2
+        y0 = -0.5 + self.margin + self.SPD_H + 0.008
+        self._drs_box = (x0, y0, W, H)
+        self.drs_bg = D.rect(x0, y0, W, H, BG)
+        self.drs_bar = D.rect(x0, y0, 0.007, H, AMBER)
+        self.drs_lab = L.label("DRS", 0.0, y0 + H / 2 - 0.0062, 0.0128,
+                               weight="bold", align="center", cap=14, track=0.0016)
+        self._drs_prev = ""
+        self._drs_t = 0.0
+        self._drs_shut_t = 0.0
+        self._drs_show(False)
+
+    def _drs_show(self, on: bool):
+        for s in (self.drs_bg, self.drs_bar, self.drs_lab):
+            s.show(on)
+
+    def _update_drs(self, state: str, dt: float):
+        """*state*: "" (nothing), "ready" (available) or "open"."""
+        self._drs_t += dt
+        if state == "open" and self._drs_prev != "open":
+            self._drs_t = 0.0                      # just opened: flash
+        if self._drs_prev == "open" and state != "open":
+            self._drs_shut_t = 0.9                 # just shut: red tab for a moment
+        self._drs_prev = state
+        self._drs_shut_t = max(0.0, self._drs_shut_t - dt)
+        if state == "open":
+            self._drs_show(True)
+            flash = self._drs_t < 0.30
+            self.drs_bg.color = DRS_FLASH if flash else DRS_GREEN
+            self.drs_bar.color = WHITE
+            self.drs_lab.set("DRS OPEN", col=INK if not flash else GREEN)
+        elif state == "ready":
+            self._drs_show(True)
+            on = int(self._drs_t * 2.5) % 2 == 0
+            self.drs_bg.color = BG
+            self.drs_bar.color = AMBER
+            self.drs_lab.set("DRS", col=AMBER if on else GREY)
+        elif self._drs_shut_t > 0.0:
+            self._drs_show(True)
+            self.drs_bg.color = DRS_SHUT
+            self.drs_bar.color = WHITE
+            self.drs_lab.set("DRS CLOSED", col=WHITE)
+        else:
+            self._drs_show(False)
 
     # -- assist (left of the telemetry) -------------------------------------------
     ASSIST_W, ASSIST_H = 0.150, 0.058
@@ -788,6 +842,7 @@ class HUD:
         """The pause card: a short menu, picked with W/S and ENTER."""
         self.pause_items = (("resume", "RESUME"),
                             *(() if self.quali else (("restart", "RESTART RACE"),)),
+                            ("settings", "SETTINGS"),
                             ("exit", "EXIT TO MENU"))
         n = len(self.pause_items)
         W = 0.500
@@ -972,7 +1027,7 @@ class HUD:
         self.t_mode.set("TIME" if self.quali else
                         "LEADER" if gap_mode == "leader" else "INTERVAL")
 
-    def update(self, *, speed_kmh, speed_frac, lap, cur_t, last_t, best_t,
+    def update(self, *, drs="", manual_gear=None, manual_revs=0.0, speed_kmh, speed_frac, lap, cur_t, last_t, best_t,
                session_t, sectors, standings, lights=-1, gantry_dy=0.0,
                flag="", spectating=False, car_xz=None, ghost_xz=None,
                throttle=0.0, brake=0.0, steer=0.0, slip=0.0, tc_cut=0.0,
@@ -1064,8 +1119,10 @@ class HUD:
         self.s_name.set(me_name)
         self.s_speed.set(f"{max(0.0, speed_kmh):0.0f}"[-3:])
         gear, within = gear_of(speed_frac)
-        self.s_gear.set(str(gear) if speed_kmh > 2.0 else "N")
-        target = 0.25 + 0.75 * within if speed_kmh > 2.0 else 0.0
+        if manual_gear is not None:
+            gear, within = manual_gear, manual_revs
+        self.s_gear.set(str(gear) if speed_kmh > 2.0 or manual_gear else "N")
+        target = 0.25 + 0.75 * within if speed_kmh > 2.0 or manual_gear else 0.0
         self._rpm += (target - self._rpm) * min(1.0, 9.0 * dt)
         lit = int(self._rpm * N_LEDS + 0.5)
         if lit != self._lit:
@@ -1132,6 +1189,8 @@ class HUD:
                         lamp.color = LAMP_ON if on else LAMP_OFF
                         glow.show(on)
                 self.g_S.flush()
+
+        self._update_drs(drs, dt)
 
         # -- race control / spectator ------------------------------------------
         tag = spect_label or ""

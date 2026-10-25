@@ -35,6 +35,7 @@ The layers, each measured in ``tools/race_sim.py`` before it stayed:
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass
 
 import numpy as np
@@ -66,6 +67,9 @@ GAP_ALONG = config.CAR_BODY_LENGTH + 1.5
 GAP_ACROSS = config.CAR_BODY_WIDTH + 0.6
 #: A car this close ahead (m) in the lane, with the car below its own pace, holds it up.
 HELD_GAP = 30.0
+#: Seconds all four wheels may be beyond the white line before the recovery routine takes
+#: a free (network-driven) car over.
+FREE_OFF_T = float(os.environ.get("FORMULA_FREE_OFF_T", 0.6))
 #: Wheel centres kept this far inside the white line by a lane.
 EDGE_ROOM = config.WHEEL_HALF_TRACK + 0.25
 #: Decelerations the planner assumes it can count on (m/s^2) -- less on the
@@ -714,6 +718,59 @@ class RaceDriver:
                                       or abs(self.abs_lane[2] - n_abs) > 1e-6):
                 self.abs_lane = (me.s, me.n, n_abs, max(self.ABS_BLEND, 2.0 * me.v))
         self.policy(self, me, field)
+        self._force_pass(me, field)
+
+    #: Seconds held up behind a clearly slower car after which the rule layer
+    #: starts the pass itself if the decision layer has not: a learned policy
+    #: trained among cars of similar pace never attacks a car crawling in front
+    #: of it, and the whole field queued behind it for a lap.
+    HELD_FORCE = 3.0
+
+    def _force_pass(self, me: CarView, field: list[CarView]):
+        if (self.attack is not None or self.cooldown > 0.0 or self.yellow
+                or self.leader is None or self.held_t < self.HELD_FORCE
+                or self.lead_pace.get(self.leader, 1.0) >= self.own_pace - PACE_EDGE):
+            return
+        ins, out = self.attack_options(me, field)
+        if ins or out:
+            self.start_attack(me, field, inside=ins)
+            return
+        # No braking zone to set a pass up for within reach -- the circuit's
+        # straights are few and a crawling car is held for a lap between them:
+        # pull out beside it on any straight, on the side with more road, and
+        # go by; the pass is judged at a point FORCE_RUN ahead.
+        fr = self.frame
+        o = {v.idx: v for v in field}.get(self.leader)
+        if o is None or not o.racing or abs(float(self.plan.kappa[fr.node(me.s)])) > self.FORCE_KAPPA:
+            return
+        gap = fr.ds(me.s, o.s)
+        if gap <= 0.0 or gap > 1.6 * self.ATTACK_GAP * max(me.v, 10.0):
+            return
+        if gap < self.FORCE_GAP:
+            # Nose to tail there is no room to pull out (the room rule holds a
+            # car in the one behind's shadow): drop back to make some first.
+            self.pace_mult = min(self.pace_mult, 0.8)
+            return
+        ko = fr.node(o.s)
+        lo = -self.track.w_left[ko] + EDGE_ROOM
+        hi = self.track.w_right[ko] - EDGE_ROOM
+        sides = sorted((-1.0, 1.0), key=lambda sd: -((hi - o.n) if sd > 0 else (o.n - lo)))
+        for side in sides:
+            n_abs = o.n + side * self.ATTACK_SEP
+            if lo <= n_abs <= hi:
+                self.attack = (o.idx, side, (me.s + self.FORCE_RUN) % fr.L, n_abs)
+                self.attack_inside = False
+                self.attacks += 1
+                self.abs_lane = (me.s, me.n, n_abs, max(self.ABS_BLEND, 2.0 * me.v))
+                self.lane_tick = self.ticks
+                return
+
+    #: How far ahead (m) a forced pass on open road is judged.
+    FORCE_RUN = 250.0
+    #: Gap (m, nose to nose) a forced pass pulls out from.
+    FORCE_GAP = 18.0
+    #: Curvature (1/m) a forced pass may be started in: a gentle bend, not only a straight.
+    FORCE_KAPPA = 8e-3
 
     # -- passing -------------------------------------------------------------
     #: Sideways distance kept from the car being passed: a body width plus room.
@@ -1374,7 +1431,10 @@ class RaceDriver:
         queued = self.leader is not None
         self.slow_t = self.slow_t + dt if (me.v < 3.0 and not queued) else 0.0
         head = self._heading_err(vehicle, me)
-        why = ("off" if self.off_t > 0.6 else "slow" if self.slow_t > 1.0
+        # A network that drives itself is given time to bring the car back on the
+        # road (it is rewarded for it); the recovery routine is the fallback.
+        off_limit = FREE_OFF_T if self._modes()[0] else 0.6
+        why = ("off" if self.off_t > off_limit else "slow" if self.slow_t > 1.0
                else "spun" if abs(head) > 1.2 and me.v < 30.0 else "")
         if why:
             self.rec_cause = why

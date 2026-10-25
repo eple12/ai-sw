@@ -45,6 +45,19 @@ SLIP_DRAG = 0.30
 #: (radius over DRS_RADIUS), drag drops to DRS_DRAG of normal. Without it a
 #: car that pulls out of the tow has the same top speed as the car it is
 #: trying to pass and can never draw alongside -- which is why F1 has it.
+#: Seconds the cars a lap or more down get to cross the line once the last car
+#: on the lead lap is home, before they are classified where they stand.
+LAPPED_GRACE_T = 12.0
+#: Human starts: each driver's reaction to the lights is their level's, plus a
+#: spread of START_SPREAD s, with a START_SLOW chance of a bad getaway (a late
+#: reaction of up to 0.35 s more), and a JUMP_TRY chance per driver of
+#: anticipating the lights -- throttle too soon, which the held car cannot
+#: act on but the stewards see (JUMP_PEN s, if the setting is on).
+START_MIN = 0.12
+START_SPREAD = 0.045
+START_SLOW = 0.12
+JUMP_TRY = 0.04
+JUMP_PEN = 5.0
 DRS_GAP = 1.8
 DRS_RADIUS = 600.0
 DRS_DRAG = 0.35
@@ -112,6 +125,10 @@ class Entrant:
     ghost: bool = False
     ghost_hold: float = 0.0
     drs: bool = False
+    #: Tried to go before the lights went out.
+    jumped: bool = False
+    #: DRS available (zone and gap), whether or not it is open.
+    drs_ok: bool = False
     #: Driven from outside (the player): never stepped here.
     external: bool = False
     #: What contacts did to an external car since the game last collected
@@ -137,6 +154,9 @@ class Entrant:
 
 
 class Field:
+    #: The player may open DRS (set by the game each tick; see _slipstream).
+    drs_req = True
+
     def __init__(self, track, frame: TrackFrame, entrants: list[Entrant],
                  laps: int, rc: RaceControl | None = None):
         self.track = track
@@ -149,6 +169,7 @@ class Field:
         self.started = False
         self.leader_done: float | None = None
         self._cutoff_t = FINISH_CUTOFF_MIN_T
+        self._lapped_t: float | None = None
         self.views: list[CarView] = []
         self.overtakes = 0
         self._order_pairs: dict = {}
@@ -189,12 +210,27 @@ class Field:
             e.vehicle.frozen = True
             e.surface.hint = k
 
-    def lights_out(self):
+    def lights_out(self, human: bool = False):
+        """The lights go out: the cars are released. *human*: each driver
+        reacts in a time of their own (see START_*) and some jump the lights."""
         self.started = True
         self.t = 0.0
+        rng = np.random.default_rng() if human else None
         for e in self.cars:
             e.vehicle.frozen = False
             e.lap_start = 0.0
+            if rng is None or e.driver is None:
+                continue
+            sk = e.driver.skill
+            r = sk.reaction + rng.normal(0.0, START_SPREAD)
+            if rng.random() < START_SLOW:
+                r += rng.uniform(0.10, 0.35)
+            sk.reaction = max(START_MIN, r)
+            if rng.random() < JUMP_TRY:
+                e.jumped = True
+                sk.reaction = 0.05              # went on the throttle with the lights
+                if settings.current.jump_start:
+                    self.rc._penalise(0.0, e.idx, JUMP_PEN, "JUMP START")
 
     # -- the player ------------------------------------------------------
     def set_external(self, idx: int, pos, yaw: float, vel, yaw_rate: float,
@@ -211,6 +247,12 @@ class Field:
         v.on_track = bool(on_track)
         self.cars[idx].braking = braking
         self.cars[idx].surface.progress(v.pos)        # keep its hint current
+
+    def jump_start(self, idx: int):
+        """The external car (the player) tried to go with the lights on."""
+        if settings.current.jump_start and not self.cars[idx].jumped:
+            self.cars[idx].jumped = True
+            self.rc._penalise(self.t, idx, JUMP_PEN, "JUMP START")
 
     def reset_external(self, idx: int):
         """The player was put back on the track: let it through everyone."""
@@ -288,6 +330,12 @@ class Field:
             straight = curv[fr.node(me.s)] < 1.0 / DRS_RADIUS
             drs = (settings.current.drs and straight and e.laps >= DRS_FROM_LAP and me.racing
                    and bool((ahead[c] & (gap[c] < DRS_GAP * V[c])).any()))
+            e.drs_ok = drs
+            # The player's DRS opens when asked for (the game sends the
+            # request: always, or the button in manual mode) and shuts under
+            # braking; the AI's opens by itself.
+            if e.external:
+                drs = drs and self.drs_req and not e.braking
             e.vehicle.drag_scale = (1.0 - SLIP_DRAG * float(best[c])) * \
                 (DRS_DRAG if drs else 1.0)
             e.drs = drs
@@ -579,13 +627,23 @@ class Field:
                         #: lap and more down) kept the result card at RUNNING.
                         self._cutoff_t = max(FINISH_CUTOFF_MIN_T,
                                              1.4 * e.lap_times[-1])
-        if self.leader_done is not None and self.t - self.leader_done > self._cutoff_t:
-            for e in self.cars:
-                if e.finish_t is None:
-                    e.finish_t = self.t
-                    e.limits.settle(self.t)
-                    while e.limits.pending:
-                        self.rc.excursion(e.idx, e.limits.pending.pop(0))
+        if self.leader_done is not None:
+            late = self.t - self.leader_done > self._cutoff_t
+            # Everyone still on the lead lap is home: the cars a lap or more
+            # down get LAPPED_GRACE_T to cross the line, then they are
+            # classified as they stand instead of keeping the card on RUNNING.
+            pend = [e for e in self.cars if e.finish_t is None]
+            if pend and all(e.laps < self.total_laps - 1 for e in pend):
+                if self._lapped_t is None:
+                    self._lapped_t = self.t
+                late = late or self.t - self._lapped_t > LAPPED_GRACE_T
+            if late:
+                for e in self.cars:
+                    if e.finish_t is None:
+                        e.finish_t = self.t
+                        e.limits.settle(self.t)
+                        while e.limits.pending:
+                            self.rc.excursion(e.idx, e.limits.pending.pop(0))
         if self.ticks % 3 == 0:
             self._count_passes()
 

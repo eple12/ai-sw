@@ -110,7 +110,7 @@ class Level:
     consistency: float     # per-lap pace std-dev
     mistakes: float        # chance per lap of a late-braking error
     aggression: float      # added to every driver's (0..1)
-    #: Race control: seconds per track-limits strike past the third (0:
+    #: Race control: seconds per track-limits strike past the fifth (0:
     #: warnings only), and whether a second light collision is penalised.
     strike_pen: float = 5.0
     minor_repeat_pen: bool = True
@@ -125,11 +125,11 @@ DIFFICULTY = {
              "A gentle field that brakes early and slips up often. "
              "Track limits are warnings only."),
     2: Level("Rookie", 0.78, 0.04, 0.88, 0.010, 0.25, -0.3, 1.0, False,
-             "Steady but beatable. Track limits cost 1 s after three strikes."),
+             "Steady but beatable. Track limits cost 1 s after five strikes."),
     3: Level("Amateur", 0.82, 0.05, 0.92, 0.008, 0.15, -0.2, 1.0, True,
              "Quick in the corners, still makes mistakes."),
     4: Level("Club", 0.86, 0.06, 0.96, 0.006, 0.08, -0.1, 2.0, True,
-             "A proper race. Track limits strikes cost 2 s after three."),
+             "A proper race. Track limits strikes cost 2 s after five."),
     5: Level("Pro", 0.94, 0.07, 0.99, 0.004, 0.03, 0.0, 2.0, True,
              "Close to the limit, rarely wrong."),
     6: Level("Legend", 0.97, 0.07, 1.00, 0.003, 0.0, 0.1, 2.0, True,

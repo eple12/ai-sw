@@ -12,6 +12,10 @@ from . import assist as assist_mod
 from . import config, grandprix, settings, teams
 from . import palette as pal
 from . import post
+from . import mozaleds
+from . import racingline
+from .skidmarks import SkidMarks
+from . import wheel as wheel_mod
 from .car import Car, lerp_pose
 from .freecam import FreeCam
 from .ghost import Ghost
@@ -188,6 +192,7 @@ class Game:
         self._rc_seen = 0
         from .effects import Effects
         self.fx = Effects()
+        self.skid = SkidMarks()
         # Built now but kept dark: the loading card is still up, and the HUD
         # should arrive with the start lights, not flash in behind the fade.
         # The first ``update`` reveals it (unless something has cleared the
@@ -360,7 +365,7 @@ class Game:
         cl = self.field
         racing = self.state in (RACING, FINISHED)
         cl.tick(self.session_time if racing else 0.0, self.vehicle,
-                self._ctl.brake > 0.05)
+                self._ctl.brake > 0.05, drs_req=self._drs_request())
         snap, kick = cl.poll()
         if cl.error and snap is None and self._snap is None:
             return
@@ -379,6 +384,8 @@ class Game:
             self._race_control(snap)
             self._contact_sounds(snap)
             from .fieldproc import C
+            if cl.player is not None:
+                self._player_drs(snap["rows"][cl.player])
             if cl.player is not None:
                 me = snap["rows"][cl.player]
                 done = np.isfinite(me[C["finish_t"]])
@@ -452,8 +459,18 @@ class Game:
         self.state = FINISHED
         self.finish_t = self.session_time
         self.finish_race_t = self.session_time
+        self._cooldown = self._make_cooldown()
+
+    def _make_cooldown(self):
+        """What drives the car after the flag: the follower of the best
+        difficulty level's plan, steering and pedals, as the AI of that level
+        does; the plain autopilot where the circuit has no solved plan."""
+        if assist_mod.available(self.track.name):
+            a = assist_mod.Assist(self.track, self.surface, max(teams.DIFFICULTY))
+            a.steer = a.pedals = True
+            return a
         from .autopilot import Autopilot
-        self._cooldown = Autopilot(self.track, self.surface)
+        return Autopilot(self.track, self.surface)
 
     def _race_control(self, snap):
         """Stewards' messages for the HUD: everything about the player, and
@@ -675,6 +692,9 @@ class Game:
             # Wide at any speed: at the base FOV the nose drops out of the
             # bottom of the frame, so a parked car showed no car at all.
             want_fov = max(want_fov, config.CAM_ONBOARD_FOV_MIN)
+        # DRS opening: a small push of the field of view, easing back on closing.
+        self._drs_amt += ((1.0 if self._drs_open else 0.0) - self._drs_amt) * min(1.0, 4.0 * dt)
+        want_fov += 4.0 * self._drs_amt
         camera.fov += (want_fov - camera.fov) * min(1.0, 3.0 * dt)
 
         # --- shake, scaled by speed and roughened off-track -------------
@@ -707,7 +727,38 @@ class Game:
         self._aim_camera()
 
     # -- input ----------------------------------------------------
+    _raceline = None
+
+    def _sync_raceline(self) -> None:
+        """Show or hide the racing-line hologram to match the setting (built on first use)."""
+        on = (settings.current.racing_line and not self.spectate
+              and racingline.available(self.track.name))
+        if on and self._raceline is None:
+            self._raceline = racingline.RacingLine(self.track)
+        if self._raceline is not None:
+            self._raceline.show(on and not self._spectating())
+
+    @staticmethod
+    def _raw_throttle() -> float:
+        """The throttle as the player's hands have it, whatever the state."""
+        t = float(held_keys["w"] or held_keys["up arrow"])
+        wh = wheel_mod.shared()
+        if wh.connected:
+            t = max(t, wh.throttle)
+        return t
+
+    def _manual_on(self) -> bool:
+        st = settings.current
+        return st.manual_gearbox and not st.auto_pedals
+
     def read_controls(self) -> Controls:
+        self.vehicle.manual = self._manual_on()
+        self._sync_raceline()
+        st = settings.current
+        self.vehicle.traction_control = st.traction_control
+        self.vehicle.abs_enabled = st.abs_enabled
+        self.vehicle.steer_assist = st.steer_assist
+        self.vehicle.edge_guard = st.edge_guard
         if self.state == COUNTDOWN:
             return Controls()
         if self.freecam.enabled:
@@ -725,6 +776,16 @@ class Game:
                 (held_keys["a"] or held_keys["left arrow"])
         ctl = Controls(throttle=float(up), brake=float(down),
                        steer=float(steer), handbrake=bool(held_keys["space"]))
+        # Steering wheel + pedals (MOZA etc.): analogue values; a key that is
+        # held still wins so the keyboard keeps working with the wheel plugged in.
+        wh = wheel_mod.shared()
+        if wh.connected:
+            if not (up or down):
+                ctl.throttle, ctl.brake = wh.throttle, wh.brake
+            if not steer:
+                ctl.steer = max(-1.0, min(1.0, wh.steer * settings.current.steer_sens))
+                ctl.analog_steer = True
+            ctl.handbrake = ctl.handbrake or wh.pressed("handbrake")
         if self.assist is not None:
             cap = math.inf
             if self.assist.pedals and self.gp is not None:
@@ -757,6 +818,13 @@ class Game:
         """
         if self._cooldown is None:
             return Controls()
+        if isinstance(self._cooldown, assist_mod.Assist):
+            cap = math.inf
+            if self.gp is not None:
+                near = [v for i, v in self.gp.proxies.items()
+                        if i != self.field.player and not self.gp._ghost.get(i, False)]
+                cap = assist_mod.leader_cap(self.vehicle, near)
+            return self._cooldown.controls(self.vehicle, Controls(), self._dt, cap)
         c = self._cooldown.controls(self.vehicle)
         return Controls(throttle=c.throttle * config.COOLDOWN_PACE,
                         brake=c.brake, steer=c.steer, handbrake=False)
@@ -772,7 +840,13 @@ class Game:
         import gc
 
         from .ui import destroy_tree
+        if self._settings_ui is not None:
+            self._settings_ui.destroy()
+            self._settings_ui = None
 
+        if self._raceline is not None:
+            self._raceline.destroy()
+            self._raceline = None
         gc.unfreeze()
         self.sound.stop()
         self.impacts.stop()
@@ -790,6 +864,7 @@ class Game:
             self.ghost = None
         self.hud.destroy()
         self.fx.destroy()
+        self.skid.destroy()
         destroy_tree(self.car)
         self.world.forget()
         if keep_world:
@@ -797,7 +872,48 @@ class Game:
         else:
             self.world.destroy()
 
+    _settings_ui = None
+    # DRS: what the player's car can do now (from the field), and the latch of
+    # the manual button.
+    _jumped = False
+    _drs_ok = False
+    _drs_open = False
+    _drs_latch = False
+    _drs_amt = 0.0
+
+    def _drs_request(self) -> bool:
+        """Whether the player wants DRS open: always, unless it is manual."""
+        if not settings.current.drs_manual:
+            return True
+        return self._drs_latch
+
+    def _player_drs(self, row) -> None:
+        """The player's row of a new field snapshot: DRS state, and the drag
+        the field worked out for the car (tow and DRS) onto the real car."""
+        from .fieldproc import C
+        self._drs_ok = bool(row[C["drs_ok"]] > 0.5)
+        self._drs_open = bool(row[C["drs"]] > 0.5)
+        if not self._drs_ok or self._ctl.brake > 0.3:
+            self._drs_latch = False           # out of the zone, or braking: shut
+        self.vehicle.drag_scale = float(row[C["drag"]])
+
+    def _drs_press(self) -> None:
+        if settings.current.drs_manual and self.field is not None \
+                and (self._drs_ok or self._drs_latch):
+            self._drs_latch = not self._drs_latch
+
+    _card_was_hidden = False
+
     def on_key(self, key: str):
+        if self._settings_ui is not None:
+            self._settings_ui.on_key(key)       # the settings screen has the keys
+            return
+        if key == "v" and self.state == RACING:
+            self._drs_press()
+            return
+        if key in ("e", "z", "gear up", "gear down") and self.vehicle.manual:
+            self.vehicle.shift(1 if key in ("e", "gear up") else -1)
+            return
         if key == "f":
             on = self.freecam.toggle()
             # The car is hidden in the bonnet view; flying away from it with
@@ -885,9 +1001,10 @@ class Game:
         elif key == "t":
             # One switch for all the driver aids: at an exhibition nobody wants
             # to reason about TC vs ABS vs steering assist separately.
-            v = self.vehicle
-            on = not v.traction_control
-            v.traction_control = v.abs_enabled = v.steer_assist = on
+            st = settings.current
+            on = not st.traction_control
+            st.traction_control = st.abs_enabled = st.steer_assist = on
+            settings.save()
         elif self.state == INTRO:
             # Any key at all skips the film. Somebody on their fifth lap of the
             # evening should not have to remember which one.
@@ -927,11 +1044,28 @@ class Game:
                 self._resume()
             elif action == "restart" and self.on_restart is not None:
                 self.on_restart()
+            elif action == "settings":
+                self._open_settings()
             elif action == "exit":
                 self._leave()
         else:
             return False
         return True
+
+    def _open_settings(self):
+        from .menu import SettingsMenu
+        self._card_was_hidden = self.pause_card_hidden
+        self.pause_card_hidden = True
+        self.hud.root.enabled = False           # the settings screen covers the HUD
+        self._settings_ui = SettingsMenu(on_back=self._close_settings, in_race=True)
+
+    def _close_settings(self):
+        if self._settings_ui is not None:
+            self._settings_ui.destroy()
+            self._settings_ui = None
+        self.pause_card_hidden = self._card_was_hidden
+        self.hud.root.enabled = not self.hud_hidden
+        self._sync_raceline()
 
     def _resume(self):
         self.state = self._resume_state
@@ -1035,6 +1169,14 @@ class Game:
             want = k < n_lit
             if e.enabled != want:
                 e.enabled = want
+        if (self.state == COUNTDOWN and not self._jumped and self.field is not None
+                and settings.current.jump_start and not self.spectate
+                and self._T_build1 <= self.start_t < self._T_out
+                and self._raw_throttle() > 0.5):
+            # Throttle with all five lights on: a jump start. The car cannot
+            # move (it is held until the lights are out); the stewards see it.
+            self._jumped = True
+            self.field.event("jump")
         if self.state == COUNTDOWN:
             if self.start_t >= self._T_out:          # lights out -> go
                 self.state = RACING
@@ -1092,6 +1234,9 @@ class Game:
 
         self.car.sync(braking=ctl.brake > 0.05, dt=dt, alpha=self._alpha)
         self.fx.update(dt, self.vehicle, self.car, ctl, others=self._fx_others())
+        self.skid.root.enabled = settings.current.skid_marks
+        if settings.current.skid_marks and not self._spectating():
+            self.skid.update(dt, [("you", self.vehicle, self.car, ctl)])
         if self.ghost is not None:
             self.ghost.sync(dt, self._alpha)
         if self._watch_idx is not None and not self._spectating():
@@ -1121,7 +1266,9 @@ class Game:
         self.impacts.muted = self.muted
         self.impacts.scrape(self.vehicle.speed, scraped, dt)
         self.sound.update(heard.speed, config.MAX_SPEED,
-                          throttle, dt, muted=self.muted)
+                          throttle, dt, muted=self.muted,
+                          revs=(heard.revs_in(heard.gear, heard.speed)
+                                if heard is self.vehicle and self._manual_on() else None))
         post.update(min(1.0, heard.speed / config.MAX_SPEED), dt)
         self._draw_hud(i)
 
@@ -1245,16 +1392,14 @@ class Game:
             # Not frozen. The result card comes up over a car that is still
             # moving, which is what the end of a race looks like; the
             # autopilot in _cooldown_controls does the driving from here.
-            from .autopilot import Autopilot
-            self._cooldown = Autopilot(self.track, self.surface)
+            self._cooldown = self._make_cooldown()
 
     def _finish_quali(self):
         """The last timed lap is in: the chequered flag, the qualifying
         result over the in-lap, and the autopilot driving it."""
         self.state = FINISHED
         self.finish_t = self.session_time
-        from .autopilot import Autopilot
-        self._cooldown = Autopilot(self.track, self.surface)
+        self._cooldown = self._make_cooldown()
 
     def _quali_record(self, best: float):
         """Keep the player's qualifying lap for a grand prix here at this
@@ -1350,9 +1495,6 @@ class Game:
         elif spectating:
             me_name, me_col = ("GHOST LAP" if self.quali else "AI DRIVER"), TEAM_AI
             spect_label = "ONBOARD  ·  " + ("GHOST LAP" if self.quali else "AI")
-        if self._look_back and not self.freecam.enabled:
-            spect_label = (spect_label + "  ·  REAR VIEW") if spect_label \
-                else "REAR VIEW"
         if self.field is not None and watch is None:
             me_pos = next((e["pos"] for e in standings if e.get("player")), None)
         target_label = target_t = None
@@ -1368,7 +1510,18 @@ class Game:
         dots = None
         if self.gp is not None:
             dots = [(p.pos, self._dot_col[k]) for k, p in self.gp.proxies.items()]
+        man = self._manual_on() and not spectating
+        leds = mozaleds.shared()
+        if leds is not None:
+            leds.set_fraction(self.hud._rpm if not spectating else 0.0,
+                              blink=self.hud._rpm > 0.97)
+        drs_state = ""
+        if self.field is not None and not spectating and self.state == RACING:
+            drs_state = "open" if self._drs_open else "ready" if self._drs_ok else ""
         self.hud.update(
+            drs=drs_state,
+            manual_gear=v.gear if man else None,
+            manual_revs=v.revs_in(v.gear, v.speed) if man else 0.0,
             assist_view=self.assist.view() if self.assist is not None else None,
             speed_kmh=v.speed * 3.6,
             speed_frac=min(1.0, v.speed / config.MAX_SPEED),
@@ -1629,8 +1782,7 @@ class Game:
                     g = r[C["gap"] if self._gap_mode == "leader" else C["interval"]]
                     gap = self._gap_text(g) if np.isfinite(g) else ""
             status = ("OUT" if r[C["recover"]] > 0.5 else
-                      "STOP" if r[C["stricken"]] > 0.5 else
-                      "DRS" if r[C["drs"]] > 0.5 else "")
+                      "STOP" if r[C["stricken"]] > 0.5 else "")
             best = float(r[C["best"]]) if np.isfinite(r[C["best"]]) else None
             out.append(dict(
                 key=k, pos=p + 1, tla=c["tla"], name=c["name"], team=c["team"],
@@ -1820,8 +1972,14 @@ TRANSITION = None
 
 def update():
     global TRANSITION
-    from .recorder import RECORDER
-    RECORDER.tick()
+    if config.REC_ENABLED:
+        from .recorder import RECORDER
+        RECORDER.tick()
+    racing = (MENU is None and GAME is not None and GAME._settings_ui is None
+              and GAME.state in (COUNTDOWN, RACING))
+    ingame = MENU is None and GAME is not None
+    for k in wheel_mod.poll_keys(menu=MENU is not None, racing=racing, ingame=ingame):     # wheel buttons act as key presses
+        input(k)
     if TRANSITION is not None:
         TRANSITION.tick()
         if TRANSITION.done:
@@ -1837,7 +1995,7 @@ def input(key):  # noqa: A001  (ursina hook name)
         # Everywhere, the menu and the loading card included.
         toggle_fullscreen()
         return
-    if key == config.REC_KEY:
+    if config.REC_ENABLED and key == config.REC_KEY:
         from .recorder import RECORDER
         RECORDER.toggle()
         return
@@ -2013,7 +2171,15 @@ def _show_modes():
     _set_menu(ModeMenu(on_pick=_pick_mode, on_quit=application.quit,
                        laps=SESSION["laps"], initial=SESSION["mode"],
                        level=SESSION["level"], on_level=_set_level,
-                       on_settings=lambda: _show_settings(_show_modes)))
+                       on_settings=lambda: _show_settings(_show_modes),
+                       on_controls=_show_controls))
+
+
+def _show_controls():
+    """What each input does; ESC goes back to the main menu."""
+    from .menu import ControlsMenu
+    _set_menu(None)
+    _set_menu(ControlsMenu(on_back=_show_modes))
 
 
 def _show_settings(back):

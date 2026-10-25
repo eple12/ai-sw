@@ -5,8 +5,9 @@
 
 ## 실행
 
-**`setup.bat`** 을 한 번 더블클릭하면 Python 환경(`.venv`)을 만들고 패키지를 설치한다(인터넷 필요).
-그 다음부터 **`run.bat`** 을 더블클릭하면 게임이 열린다.
+**`FORMULA-AI.bat`** 을 더블클릭하면 끝이다. 처음 한 번은 Python(3.10~3.12, 없으면 설치)과 `.venv`와 패키지를
+알아서 준비하고(인터넷 필요), 이후엔 바로 게임이 열린다. 환경만 따로 만들거나 고치려면 `setup.bat`, 메뉴 없이
+바로 시작하려면 `run.bat --track Spa --laps 5`.
 
 직접 실행하려면:
 
@@ -34,7 +35,7 @@ python run.py --track Spa --laps 5   # 메뉴 건너뛰고 그랑프리
 | H / P | HUD / 일시정지 카드 숨기기 |
 | F / M | 자유 카메라 / 음소거 |
 | F11 | 전체화면 |
-| F9 | 화면 녹화 시작·종료 (ffmpeg 필요, `내 동영상\FORMULA-AI`에 저장) |
+| F9 | (녹화는 현재 비활성: config.REC_ENABLED) |
 | ESC | 일시정지 |
 
 ## 게임 모드
@@ -45,16 +46,22 @@ python run.py --track Spa --laps 5   # 메뉴 건너뛰고 그랑프리
 - **난이도 1–6** (`game/teams.py`): 낮은 그립으로 푼 계획을 따라 달리게 해 단계를 만든다. 모나 폴 랩타임:
   Novice 99.8 s, Rookie 96.3, Amateur 94.1, Club 92.1, Pro 89.2, Legend 88.1.
 
-## 설정 (메인 메뉴·서킷 선택에서 `O`)
+## 설정 (메인 메뉴의 SETTINGS 버튼 · `O` · 일시정지 카드의 SETTINGS)
 
-세션을 시작하기 전에만 바꿀 수 있고(경기 중에는 불가), 값은 `~/.formula-ai/settings.json`에 저장된다.
+값은 `~/.formula-ai/settings.json`에 저장된다. 경기 중(ESC → SETTINGS)에는 수동 변속, 조향 감도, TC·ABS·조향 보조만
+바꿀 수 있고(나머지는 흐리게 표시), 규칙·자동 주행 항목은 세션을 시작하기 전에만 바꾼다. 항목이 많아 W/S로 스크롤된다.
 
 | 항목 | 효과 |
 |---|---|
+| RACING LINE | 최적해(최고 그립 계획)의 레이싱 라인을 도로 위 홀로그램으로 표시. 초록 = 가속, 노랑 = 감속 시작, 빨강 = 브레이킹(강할수록 진함), 가로 막대 = 브레이킹 포인트. 경기 중에도 켜고 끌 수 있다 |
+| TYRE MARKS | 락업·슬라이드·휠스핀 때 도로에 검은 타이어 자국을 남긴다(경기 중에도 켜고 끌 수 있다) |
+| TRACTION CONTROL, ABS, STEERING ASSIST | 운전 보조. 경기 중 `T`는 셋을 한꺼번에 켜고 끈다 |
+| MANUAL GEARBOX, STEERING SENSITIVITY | 수동 변속(휠 패들 / E·Z), 휠 감도 0.5x~4.0x |
 | AUTO STEERING | 조향을 추종기가 맡는다. A / D를 누르고 있는 동안은 내 조향이 우선이고, 놓으면 추종기가 그 자리의 선을 이어서 따라간다(레이싱 라인으로 되돌아가지 않고, 흰 선 밖으로는 나가지 않게). Q는 레이싱 라인으로 복귀 |
 | AUTO PEDALS | 가속·브레이크도 자동(W / S를 누르는 동안은 내 입력이 우선). 선택한 난이도의 중위권 AI와 같은 계획과 페이스로 달리고(Novice는 느리고 조심스럽게, Legend는 전력으로), 앞차 뒤에서는 간격을 유지. 조향까지 켜면 옆으로 움직이는 입력만으로 주행한다 |
 | YELLOW FLAGS | 멈춘 차가 옐로를 내고 모두 감속. 끄면 옐로 자체가 없다 |
-| DRS, SLIPSTREAM | 각각 끌 수 있다 |
+| JUMP START PENALTY | 불이 켜져 있는 동안 스로틀을 밟으면(AI는 가끔 성급하게 반응) 5초 페널티. 어느 쪽이든 차는 불이 꺼질 때까지 출발하지 못한다. AI의 스타트 반응은 드라이버마다, 레이스마다 다르다 |
+| DRS, SLIPSTREAM | 각각 끌 수 있다. MANUAL DRS를 켜면 DRS 구간·간격 조건이 맞을 때 하단 중앙에 `DRS` 표시가 깜빡이고, `V`(휠·패드는 레이스 중 Y)로 열고 닫는다. 열리면 `DRS OPEN`(초록, 시야각 확장), 브레이크를 밟거나 구간을 벗어나면 닫힘. 타워에는 DRS가 표시되지 않는다 |
 | PENALTY · TRACK LIMITS / COLLISIONS / YELLOW FLAGS | 종류별로 시간 페널티(경고 포함)를 끈다 |
 
 자동 조향·페달은 계획 해가 있는 서킷에서만 켜진다.
@@ -103,7 +110,7 @@ python run.py --track Spa --laps 5   # 메뉴 건너뛰고 그랑프리
 
 ### 학습·평가 도구
 
-| 명령 (저장소 루트에서) | 하는 일 |
+| 명령 (`ai_sw/`에서) | 하는 일 |
 |---|---|
 | `tools/race_metrics.py [--policy X.npz] [--races N] [--all-cars] --name X` | 5개 장면과 전체 레이스 지표 (성공률, 접촉, 복구, 연석, 줄서기). 결과 `policy/raceai/X.json` |
 | `tools/ppo_raceai.py --bc policy/raceai/bc.npz --out DIR --jobs 4` | 판단 층 PPO |
@@ -112,19 +119,19 @@ python run.py --track Spa --laps 5   # 메뉴 건너뛰고 그랑프리
 | `tools/dagger_one.py train --out DIR` / `tools/ppo_one.py --init DIR/one_last.npz --out DIR2` | 하나의 신경망: 두 망을 모방 / 두 머리를 함께 PPO |
 | `tools/solve_all.py` | 모든 서킷의 계획 계산 (한 번에 한 서킷, 메모리 큼) |
 | `tools/race_sim.py`, `tools/smoke_raceai.py`, `tools/smoke_headless.py` | 화면 없는 레이스 시뮬, 배관 점검, 물리 검증 |
+| `../ai_sw_gpu/kaggle/raceai_push.py NAME [--trainer dagger]` | Kaggle CPU 커널로 학습 (4코어, 로그는 끝난 뒤에 받을 수 있음) |
 
-Windows에서는 학습 작업자를 4개까지만 쓴다(그 이상은 메모리 오류). 학습 결과 파일(`policy/`)과 Kaggle 업로드 스크립트는 이 저장소에 없다.
+Windows에서는 학습 작업자를 4개까지만 쓴다(그 이상은 메모리 오류).
 
 ## 구조
 
 ```
-run.py, run.bat, setup.bat   게임 시작, 환경 설치
+run.py, run.bat        게임 시작
 game/
   config.py            튜닝 상수 전부
   vehicle.py           동역학 자전거 모델 (Pacejka 타이어, 마찰원, 하중이동, TC/ABS/ESC)
   surface.py trackdata.py trackmesh.py scenery.py props.py terrain.py   트랙·노면·경치
   mintime_driver.py    계획과 추종 제어기
-  assist.py settings.py   초보자 보조(자동 조향·페달·차선)와 세션 설정
   racecraft.py raceai.py raceenv.py   판단 층 (규칙 / 학습 정책) 과 학습용 환경·심판
   drivenet.py onenet.py  조향·페달 신경망 / 판단까지 하는 하나의 신경망
   field.py fieldproc.py gpfield.py racecontrol.py   20대 필드(별도 프로세스), 레이스 컨트롤
@@ -132,12 +139,30 @@ game/
   recorder.py          F9 녹화
 tools/                 학습·평가·미리보기·검증 (위 표)
 assets/                모델, 계획(racelines), 고스트, 정책(policies)
-data/                  서킷 데이터 (f1tenth_racetracks)
+policy/                학습 결과 (policy/raceai, policy/drivenet)
 ```
 
 ## 한계
 
 - 트랙은 평면이다(f1tenth 데이터에 고도가 없다).
 - 타이어 온도·마모·연료·피트스톱이 없다.
-- 서킷 이름·팀 이름은 가상이거나 실제 서킷명을 그대로 쓴다. 트랙 데이터는 f1tenth_racetracks(MIT), 일부 도로변 모델은 Kenney Racing Kit(CC0)이다
-  (`assets/models/kenney/LICENSE.txt`).
+- 서킷 이름·팀 이름은 가상이거나 실제 서킷명을 그대로 쓴다. 공개 배포 시 트랙 데이터(MIT)와 Kenney 에셋(CC0)의
+  출처 표기는 저장소 루트 README를 따른다.
+
+## 게임패드 (Switch 프로콘 등)
+
+벤더 ID로 자동 인식해 게임패드 프로필을 쓴다(휠이 같이 연결돼 있으면 휠이 우선).
+
+| 입력 | 동작 |
+|---|---|
+| 왼쪽 스틱 좌우 | 조향 (설정의 STEERING SENSITIVITY 적용) |
+| ZR / ZL | 가속 / 브레이크 (버튼이라 눌렀을 때 부드럽게 올라감) |
+| B | 핸드브레이크 (메뉴에서는 뒤로) |
+| A | 확인 (레이스 중에는 뒤 보기) |
+| X / Y | 카메라 전환 / DRS (레이스 밖에서는 타워 간격 전환) |
+| L / R | 변속 다운 / 업 (MANUAL GEARBOX) |
+| + | 일시정지 · 홈 = 설정(메뉴)  |
+| 왼쪽/오른쪽 스틱 누르기 | 음소거 / HUD 숨김 |
+| 십자키·왼쪽 스틱 | 메뉴 이동 (길게 누르면 반복) |
+| − 누른 채 + Y / A / X / B / L / R | 리셋 / 관전 전환 / 프리캠 / 레이싱 라인 복귀 / 카드 숨김 / 뒤 보기 |
+| − 만 탭 | 운전 보조 on/off |

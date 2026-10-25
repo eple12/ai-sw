@@ -53,8 +53,8 @@ R_OFF = float(os.environ.get("PD_R_OFF", 0.6))      # all four wheels beyond the
 R_KERB = float(os.environ.get("PD_R_KERB", 0.8))     # two wheels or more beyond the white line
 R_KERB1 = float(os.environ.get("PD_R_KERB1", 0.08))  # any wheel
 R_ERR = 0.12              # per m^2 past a metre of line error
-R_SLOW = 0.025            # per m/s under the speed asked for
-R_FAST = 0.05             # per m/s over it
+R_SLOW = float(os.environ.get("PD_R_SLOW", 0.025))      # per m/s under the speed asked for
+R_FAST = float(os.environ.get("PD_R_FAST", 0.05))       # per m/s over it
 R_JERK = 0.15             # per unit change of wheel / pedal between decisions
 
 

@@ -34,6 +34,7 @@ from ursina import Entity, Mesh, Vec3, scene
 from . import config
 from . import f1car
 from . import palette as pal
+from . import wheelaxis
 from .vehicle import Vehicle
 
 MODEL_DIR = config.ASSET_DIR / "models" / "kenney"
@@ -48,6 +49,28 @@ WHEEL_NODES = {
     "wheelFrontLeft": True, "wheelFrontRight": True,
     "wheelBackLeft": False, "wheelBackRight": False,
 }
+
+
+#: (model, wheel node) -> (a point on the axle, its direction) in the hub's frame,
+#: found once from the wheel's vertices (game/wheelaxis.py) and shared by every
+#: car of the model.
+_AXLES: dict = {}
+
+
+def _wheel_vertices(np_, rel):
+    """The vertices of every mesh under *np_*, in the frame of *rel*."""
+    import numpy as np
+    from panda3d.core import GeomVertexReader
+    out = []
+    for gn in np_.find_all_matches("**/+GeomNode"):
+        node = gn.node()
+        m = gn.get_mat(rel)
+        for i in range(node.get_num_geoms()):
+            rd = GeomVertexReader(node.get_geom(i).get_vertex_data(), "vertex")
+            while not rd.is_at_end():
+                q = m.xform_point(rd.get_data3())
+                out.append((q.x, q.y, q.z))
+    return np.array(out, dtype=float)
 
 
 def lerp_pose(vehicle: Vehicle, alpha: float) -> tuple[float, float, float]:
@@ -142,6 +165,7 @@ class Car(Entity):
     def __init__(self, vehicle: Vehicle, model: str = DEFAULT_MODEL, **kw):
         super().__init__(parent=scene, **kw)
         self.vehicle = vehicle
+        self.car_model = model            # (not `model`: that is the Entity's own mesh)
         self._roll = 0.0
         self._pitch = 0.0
         self._spin = 0.0
@@ -227,7 +251,31 @@ class Car(Entity):
             hub.position = Vec3((lo.x + hi.x) / 2, (lo.y + hi.y) / 2,
                                 (lo.z + hi.z) / 2)
             hub.steers = steers
-            hub.spinner = Entity(parent=hub)
+            # The wheel rolls about its own axle, which on the baked cars is not
+            # the hub's x axis: the front wheels carry about 4 deg of camber in
+            # the model, and spun about the straight line they wobble from side
+            # to side like a bent rim. ``tilt`` stands the spinner's x axis on
+            # the axle (see game/wheelaxis.py).
+            tilt = Entity(parent=hub)
+            key = (self.car_model, name)
+            if key not in _AXLES:
+                fit = None
+                try:
+                    fit = wheelaxis.fit(_wheel_vertices(np, hub))
+                except Exception:
+                    pass
+                _AXLES[key] = (fit[0], fit[1]) if fit is not None else None
+            axle = _AXLES[key]
+            if axle is not None:
+                from panda3d.core import LMatrix4f
+                R = wheelaxis.basis(axle[1])
+                pt = axle[0]
+                tilt.setMat(LMatrix4f(
+                    R[0, 0], R[0, 1], R[0, 2], 0.0,
+                    R[1, 0], R[1, 1], R[1, 2], 0.0,
+                    R[2, 0], R[2, 1], R[2, 2], 0.0,
+                    float(pt[0]), float(pt[1]), float(pt[2]), 1.0))
+            hub.spinner = Entity(parent=tilt)
             # wrt_ keeps the wheel exactly where it is on screen while moving
             # it in the hierarchy; a plain reparent would drop it at the origin.
             np.wrt_reparent_to(hub.spinner)

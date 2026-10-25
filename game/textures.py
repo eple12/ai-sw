@@ -237,6 +237,17 @@ def _blur1d(a: np.ndarray, sigma: float, axis: int, wrap: bool) -> np.ndarray:
     return out
 
 
+def _best_plan(track):
+    """The circuit's best solved lap, or None where there is none."""
+    from . import racingline
+    from .mintime_driver import Plan
+    path = racingline.best_plan_path(track.name)
+    if path is None:
+        return None
+    plan = Plan(path)
+    return plan if plan.n == track.count else None
+
+
 def lap_map(track, width: int = 4096, height: int = 64):
     """The road in lap space: U along the lap, V across it, left to right.
 
@@ -274,8 +285,33 @@ def lap_map(track, width: int = 4096, height: int = 64):
         wt = np.broadcast_to(np.asarray(weight, dtype=np.float64), u.shape)
         np.add.at(acc, (v[ok], u[ok]), wt[ok])
 
-    rec = replay.load(track.name, track)
-    if rec is not None:
+    plan = _best_plan(track)
+    rec = None if plan is not None else replay.load(track.name, track)
+    if plan is not None:
+        # The optimal solution (the same one the racing-line hologram shows):
+        # the rubber is laid where its wheels go, the braking marks where it
+        # sheds speed, and the tyres work hardest in the corners it takes
+        # fastest.
+        from . import racingline
+        a = racingline._decel(plan.v, plan.seg)
+        lat_g = plan.v ** 2 * np.abs(plan.kappa) / 9.81
+        br = np.clip((-a - racingline.BRAKE_A) / (racingline.HARD_A - racingline.BRAKE_A), 0.0, 1.0)
+        k = 8
+        t = np.tile(np.linspace(0.0, 1.0, k, endpoint=False), n)
+        i = np.repeat(np.arange(n), k)
+        j = (i + 1) % n
+        s = track.arclen[i] + t * track.seg_len[i]
+
+        def along(arr):                       # per-node value, interpolated along the segment
+            return arr[i] * (1.0 - t) + arr[j] * t
+        lat0 = along(plan.n_raw)
+        dist = along(plan.seg) / k
+        load = 1.0 + 0.8 * np.clip(along(lat_g) - 1.2, 0.0, 2.0)
+        for side in (-1.0, 1.0):
+            lat = lat0 + side * config.WHEEL_HALF_TRACK
+            splat(s, lat, i, rubber, dist * load)
+            splat(s, lat, i, brake, dist * along(br) ** 2)
+    elif rec is not None:
         fr = rec.frames.astype(np.float64)
         C = replay.C
         x, z, yaw = fr[:, C["x"]], fr[:, C["z"]], fr[:, C["yaw"]]

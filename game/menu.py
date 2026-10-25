@@ -121,8 +121,10 @@ class ModeMenu:
 
     def __init__(self, on_pick, on_quit, laps: int = config.TOTAL_LAPS,
                  initial: str | None = None, level: int = teams.DEFAULT_LEVEL,
-                 on_level=None, on_settings=None):
+                 on_level=None, on_settings=None, on_controls=None):
         self.on_settings = on_settings
+        self.on_controls = on_controls
+        self.btn = 0
         self.on_pick = on_pick
         self.on_quit = on_quit
         self.on_level = on_level or (lambda lv: None)
@@ -131,7 +133,8 @@ class ModeMenu:
         self.sel = keys.index(initial) if initial in keys else 0
         self.levels = sorted(teams.DIFFICULTY)
         self.level = level if level in teams.DIFFICULTY else teams.DEFAULT_LEVEL
-        self.row = 0                 # 0: session cards, 1: difficulty
+        self.row = 0                 # 0: session cards, 1: difficulty, 2: SETTINGS
+        self._hover = -1
         self.root = Entity(parent=camera.ui)
         _base_screen(self, "racing")
 
@@ -140,6 +143,20 @@ class ModeMenu:
         Entity(parent=self.root, model="quad", color=RED,
                scale=(0.30, 0.006), position=(-0.65, 0.275, 0.15))
         self._txt(spaced("main menu"), size=0.8, col=GREY, pos=(-0.80, 0.245))
+        # CONTROLS and SETTINGS: buttons (click, or W / S down to them, A / D
+        # between them, ENTER).
+        self.btns = []
+        for k, (label, cb) in enumerate((("CONTROLS", on_controls),
+                                         ("SETTINGS", on_settings))):
+            x = 0.38 + 0.29 * k
+            ent = Entity(parent=self.root, model="quad", color=PANEL_HI,
+                         scale=(0.26, 0.052), position=(x, 0.372, 0.2),
+                         collider="box")
+            ent.on_click = (lambda c=cb: c and c())
+            ent.on_mouse_enter = (lambda k=k: setattr(self, "_hover", k) or self._refresh())
+            ent.on_mouse_exit = (lambda: setattr(self, "_hover", -1) or self._refresh())
+            txt = self._txt(label, size=1.0, col=WHITE, pos=(x, 0.372), origin=(0, 0))
+            self.btns.append((ent, txt, cb))
 
         H = self.CARD_H
         self.cards = []
@@ -170,9 +187,8 @@ class ModeMenu:
                                    name=name, info=info))
 
         self._build_level()
-        self._build_controls()
         self._txt("A / D  CHOOSE          W / S  SESSION  ·  DIFFICULTY"
-                  "          ENTER  CONTINUE          O  SETTINGS          ESC  QUIT",
+                  "          ENTER  CONTINUE          C  CONTROLS          O  SETTINGS          ESC  QUIT",
                   size=0.72, col=GREY, pos=(-0.80, -0.482))
         self._refresh()
 
@@ -255,11 +271,22 @@ class ModeMenu:
             b["name"].color = WHITE if on else GREY if below else GREY_DIM
         self.lv_cursor.enabled = focus
         self.lv_head.color = WHITE if focus else GREY_DIM
+        for k, (ent, _t, _cb) in enumerate(self.btns):
+            lit = (self.row == 2 and self.btn == k) or self._hover == k
+            ent.color = RED if lit else PANEL_HI
 
     def on_key(self, key: str):
         n = len(MODES)
         if key in ("down arrow", "s", "up arrow", "w"):
-            self.row = 1 - self.row
+            step = 1 if key in ("down arrow", "s") else -1
+            self.row = (self.row + step) % 3
+            self._refresh()
+        elif self.row == 2 and key in ("enter", "space"):
+            cb = self.btns[self.btn][2]
+            if cb:
+                cb()
+        elif self.row == 2 and key in ("right arrow", "d", "left arrow", "a"):
+            self.btn = 1 - self.btn
             self._refresh()
         elif key in ("right arrow", "d", "left arrow", "a",
                      "right arrow hold", "d hold", "left arrow hold", "a hold"):
@@ -268,7 +295,7 @@ class ModeMenu:
                 if key.endswith("hold"):
                     return
                 self.sel = (self.sel + step) % n
-            else:
+            elif self.row == 1:
                 k = self.levels.index(self.level)
                 self.level = self.levels[min(max(k + step, 0), len(self.levels) - 1)]
                 self.on_level(self.level)
@@ -277,6 +304,8 @@ class ModeMenu:
             self.on_pick(MODES[self.sel][0])
         elif key == "o" and self.on_settings is not None:
             self.on_settings()
+        elif key == "c" and self.on_controls is not None:
+            self.on_controls()
         elif key == "escape":
             self.on_quit()
 
@@ -630,33 +659,38 @@ class StartMenu:
 
 # --- settings --------------------------------------------------------------
 class SettingsMenu:
-    """The session's rules and aids (game/settings.py), one row each, ON or OFF.
-    W / S pick a row, A / D or ENTER flip it, ESC saves and goes back. Never
-    reachable during a race."""
+    """The session's rules and aids (game/settings.py), one row each.
+    W / S pick a row, A / D or ENTER change it, ESC saves and goes back. Opened
+    from the main menu, or from the pause card in a race (``in_race``), where
+    only the live rows (settings.LIVE) can be changed."""
 
-    TOP, PITCH, ROW_H, W = 0.215, 0.083, 0.072, 1.62
+    TOP, PITCH, ROW_H, W = 0.215, 0.068, 0.062, 1.62
+    VISIBLE = 9
 
-    def __init__(self, on_back):
+    def __init__(self, on_back, in_race: bool = False):
         self.on_back = on_back
+        self.in_race = in_race
         self.font = pick_font()
         self.sel = 0
+        self.first = 0
         self.root = Entity(parent=camera.ui)
         _base_screen(self, "settings")
         self.rows = []
-        for k, (name, title, what) in enumerate(settings.ROWS):
-            y = self.TOP - k * self.PITCH - self.ROW_H / 2
+        for name, title, what in settings.ROWS:
             bg = Entity(parent=self.root, model="quad", color=PANEL,
-                        scale=(self.W, self.ROW_H), position=(0, y, 0.3))
+                        scale=(self.W, self.ROW_H), position=(0, 0, 0.3))
             bar = Entity(parent=self.root, model="quad", color=RED,
-                         scale=(0.008, self.ROW_H), position=(-self.W / 2 - 0.004, y, 0.25))
-            t = self._txt(title, size=1.05, col=WHITE, pos=(-0.77, y + 0.014))
-            d = self._txt(what, size=0.62, col=GREY_DIM, pos=(-0.77, y - 0.017))
+                         scale=(0.008, self.ROW_H), position=(-self.W / 2 - 0.004, 0, 0.25))
+            t = self._txt(title, size=1.05, col=WHITE, pos=(-0.77, 0))
+            d = self._txt(what, size=0.62, col=GREY_DIM, pos=(-0.77, 0))
             box = Entity(parent=self.root, model="quad", color=PANEL_HI,
-                         scale=(0.17, 0.044), position=(0.69, y, 0.2))
-            val = self._txt("", size=0.95, col=WHITE, pos=(0.69, y), origin=(0, 0))
+                         scale=(0.17, 0.044), position=(0.69, 0, 0.2))
+            val = self._txt("", size=0.95, col=WHITE, pos=(0.69, 0), origin=(0, 0))
             self.rows.append(dict(name=name, bg=bg, bar=bar, title=t, desc=d, box=box, val=val))
-        self._txt("W / S   SELECT          A / D   OFF · ON          ESC   SAVE AND BACK"
-                  "          (settings cannot be changed during a race)",
+        self.more = self._txt("", size=0.72, col=GREY, pos=(0.62, -0.482))
+        self._txt("W / S   SELECT          A / D   CHANGE          ESC   SAVE AND BACK"
+                  + ("          (dimmed rows are fixed once a race has started)"
+                     if in_race else ""),
                   size=0.72, col=GREY, pos=(-0.80, -0.482))
         self._refresh()
 
@@ -664,21 +698,56 @@ class SettingsMenu:
         return Text(s, parent=self.root, font=self.font, scale=size, color=col,
                     origin=origin, position=(pos[0], pos[1], z))
 
+    def _locked(self, r) -> bool:
+        return self.in_race and r["name"] not in settings.LIVE
+
     def _refresh(self):
+        n = len(self.rows)
+        self.first = max(0, min(self.first, n - self.VISIBLE))
+        if self.sel < self.first:
+            self.first = self.sel
+        elif self.sel >= self.first + self.VISIBLE:
+            self.first = self.sel - self.VISIBLE + 1
         for k, r in enumerate(self.rows):
-            on = bool(getattr(settings.current, r["name"]))
+            shown = self.first <= k < self.first + self.VISIBLE
+            for key in ("bg", "bar", "title", "desc", "box", "val"):
+                r[key].enabled = shown
+            if not shown:
+                continue
+            y = self.TOP - (k - self.first) * self.PITCH - self.ROW_H / 2
+            r["bg"].y = r["bar"].y = r["box"].y = y
+            r["title"].y, r["desc"].y, r["val"].y = y + 0.014, y - 0.017, y
+            val = getattr(settings.current, r["name"])
+            on = bool(val)
             focus = k == self.sel
+            locked = self._locked(r)
             r["bg"].color = PANEL_HI if focus else PANEL
             r["bar"].enabled = focus
-            r["title"].color = WHITE if focus else GREY
-            r["desc"].color = GREY if focus else GREY_DIM
-            r["box"].color = RED if on else (PANEL if focus else PANEL_HI)
-            r["val"].text = "ON" if on else "OFF"
-            r["val"].color = WHITE if on else GREY
+            r["title"].color = GREY_DIM if locked else WHITE if focus else GREY
+            r["desc"].color = GREY_DIM if locked or not focus else GREY
+            r["box"].color = RED if on and not locked else (PANEL if focus else PANEL_HI)
+            if isinstance(val, float):
+                r["box"].color = RED if focus and not locked else PANEL_HI
+                r["val"].text = f"{val:.1f}x"
+            else:
+                r["val"].text = "ON" if on else "OFF"
+            r["val"].color = GREY_DIM if locked else WHITE if on or isinstance(val, float) else GREY
+        above, below = self.first, n - self.first - self.VISIBLE
+        self.more.text = (("^ " if above else "") + (f"{self.sel + 1} / {n}")
+                          + (" v" if below > 0 else ""))
 
     def _flip(self, to=None):
-        name = self.rows[self.sel]["name"]
-        cur = bool(getattr(settings.current, name))
+        r = self.rows[self.sel]
+        if self._locked(r):
+            return
+        name = r["name"]
+        cur = getattr(settings.current, name)
+        if isinstance(cur, float):
+            step = 0.1 if to else -0.1 if to is False else 0.0
+            setattr(settings.current, name, round(min(4.0, max(0.5, cur + step)), 1))
+            self._refresh()
+            return
+        cur = bool(cur)
         setattr(settings.current, name, (not cur) if to is None else to)
         self._refresh()
 
@@ -698,6 +767,110 @@ class SettingsMenu:
             self._flip()
         elif key in ("escape", "o"):
             settings.save()
+            self.on_back()
+
+    def destroy(self):
+        destroy_tree(self.root)
+        self.root = None
+
+
+
+# --- controls --------------------------------------------------------------
+CONTROL_TABS = (
+    ("KEYBOARD", (
+        ("W / UP", "THROTTLE"), ("S / DOWN", "BRAKE"), ("A D / LEFT RIGHT", "STEER"),
+        ("SPACE", "HANDBRAKE"), ("V", "DRS (MANUAL DRS)"), ("E / Z", "SHIFT UP / DOWN"),
+        ("R", "BACK ON TRACK"), ("C", "CAMERA"), ("X", "LOOK BACK"),
+        ("G / SHIFT+G", "WATCH CARS"), ("TAB", "INTERVAL / LEADER"),
+        ("T", "DRIVER AIDS"), ("Q", "BACK TO RACING LINE"), ("H", "HIDE HUD"),
+        ("M", "MUTE"), ("F", "FREE CAMERA"), ("P", "HIDE PAUSE CARD"),
+        ("O", "SETTINGS (MENUS)"), ("F11", "FULLSCREEN"), ("ESC", "PAUSE"),
+    )),
+    ("MOZA WHEEL", (
+        ("WHEEL", "STEER"), ("RIGHT PEDAL", "THROTTLE"), ("LEFT PEDAL", "BRAKE"),
+        ("B", "HANDBRAKE  ·  BACK IN MENUS"), ("A", "LOOK BACK  ·  ENTER IN MENUS"),
+        ("X", "PAUSE (ESC)"), ("Y", "DRS  ·  INTERVAL / LEADER"),
+        ("PADDLES", "SHIFT DOWN / UP"), ("D-PAD", "MENU MOVE"), ("HOME", "PAUSE"),
+        ("CAM", "CAMERA"), ("CAM + A", "BACK ON TRACK"), ("CAM + B", "MUTE"),
+        ("CAM + X", "HIDE HUD"), ("CAM + Y", "DRIVER AIDS"),
+        ("CAM + UP", "SETTINGS (MENUS)"), ("CAM + RIGHT", "WATCH CARS"),
+        ("CAM + DOWN", "FREE CAMERA"), ("CAM + LEFT", "HIDE PAUSE CARD"),
+        ("CAM + DOWNSHIFT", "BACK TO RACING LINE"),
+    )),
+    ("PRO CONTROLLER", (
+        ("LEFT STICK", "STEER"), ("ZR", "THROTTLE"), ("ZL", "BRAKE"),
+        ("B", "HANDBRAKE  ·  BACK IN MENUS"), ("A", "LOOK BACK  ·  ENTER IN MENUS"),
+        ("X", "CAMERA"), ("Y", "DRS  ·  INTERVAL / LEADER"), ("L / R", "SHIFT DOWN / UP"),
+        ("+", "PAUSE"), ("HOME", "SETTINGS (MENUS)"), ("D-PAD / STICK", "MENU MOVE"),
+        ("STICK CLICK L / R", "MUTE / HIDE HUD"), ("-", "DRIVER AIDS"),
+        ("- + Y", "BACK ON TRACK"), ("- + A", "WATCH CARS"), ("- + X", "FREE CAMERA"),
+        ("- + B", "BACK TO RACING LINE"), ("- + L", "HIDE PAUSE CARD"),
+        ("- + R", "LOOK BACK"),
+    )),
+)
+
+
+class ControlsMenu:
+    """What every input does, one tab per device. A / D switch tabs, ESC goes back."""
+
+    TOP = 0.200
+    PITCH = 0.056
+
+    def __init__(self, on_back):
+        self.on_back = on_back
+        self.font = pick_font()
+        self.tab = 0
+        self.root = Entity(parent=camera.ui)
+        _base_screen(self, "controls")
+        self.heads = []
+        n = len(CONTROL_TABS)
+        w = 0.50
+        for k, (name, _rows) in enumerate(CONTROL_TABS):
+            x = -0.80 + w / 2 + k * (w + 0.060)
+            bg = Entity(parent=self.root, model="quad", color=PANEL_HI,
+                        scale=(w, 0.050), position=(x, 0.258, 0.3))
+            t = self._txt(name, size=0.95, col=GREY, pos=(x, 0.258), origin=(0, 0))
+            self.heads.append((bg, t))
+        self.body = None
+        self._txt("A / D   SWITCH DEVICE          ESC   BACK",
+                  size=0.72, col=GREY, pos=(-0.80, -0.482))
+        self._refresh()
+
+    def _txt(self, s, *, size=1.0, col=WHITE, pos=(0, 0), origin=(-0.5, 0), z=-0.1,
+             parent=None):
+        return Text(s, parent=parent or self.root, font=self.font, scale=size,
+                    color=col, origin=origin, position=(pos[0], pos[1], z))
+
+    def _refresh(self):
+        for k, (bg, t) in enumerate(self.heads):
+            bg.color = RED if k == self.tab else PANEL_HI
+            t.color = WHITE if k == self.tab else GREY
+        if self.body is not None:
+            destroy_tree(self.body)
+        self.body = Entity(parent=self.root)
+        rows = CONTROL_TABS[self.tab][1]
+        per_col = (len(rows) + 1) // 2
+        for k, (keys, what) in enumerate(rows):
+            c, r = divmod(k, per_col)
+            x = -0.80 + c * 0.82
+            y = self.TOP - r * self.PITCH
+            w = 0.0105 * len(keys) + 0.030
+            Entity(parent=self.body, model="quad", color=PANEL_HI,
+                   scale=(w, 0.038), position=(x + w / 2, y, 0.2))
+            self._txt(keys, size=0.74, col=WHITE, pos=(x + w / 2, y),
+                      origin=(0, 0), parent=self.body)
+            self._txt(what, size=0.78, col=GREY, pos=(x + w + 0.016, y),
+                      parent=self.body)
+
+    def on_key(self, key: str):
+        n = len(CONTROL_TABS)
+        if key in ("right arrow", "d"):
+            self.tab = (self.tab + 1) % n
+            self._refresh()
+        elif key in ("left arrow", "a"):
+            self.tab = (self.tab - 1) % n
+            self._refresh()
+        elif key in ("escape", "enter", "c"):
             self.on_back()
 
     def destroy(self):

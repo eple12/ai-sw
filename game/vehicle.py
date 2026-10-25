@@ -124,11 +124,16 @@ class Vehicle:
     esc_cut: float = 0.0        # 0..1, how hard stability control is damping yaw
     traction_control: bool = config.TRACTION_CONTROL
     abs_enabled: bool = config.ABS_ENABLED
+    #: The beginner's guard: a wall along the white line (Surface.resolve_limits).
+    edge_guard: bool = False
     steer_assist: bool = config.STEER_ASSIST
     #: Per-car multipliers for a field of different cars: engine power (a
     #: team's car), and aerodynamic drag (set each step by the race for a car
     #: in another's slipstream). 1.0 is the car every other tool assumes.
     power_scale: float = 1.0
+    #: Manual gearbox (player only): off = the speed-based automatic one.
+    manual: bool = False
+    gear: int = 1
     drag_scale: float = 1.0
 
     # State as it was before the most recent step, so the renderer can
@@ -378,6 +383,29 @@ class Vehicle:
         return min(1.0, excess / max(abs(self.yaw_rate) + excess, 1e-6))
 
     # -- integration -------------------------------------------------
+    GEARS = 6
+    REV_LIMIT = 1.0
+
+    def revs_in(self, gear: int, v: float) -> float:
+        """Engine revs 0..1 (1 = limiter) in *gear* at forward speed *v*."""
+        top = gear / self.GEARS * config.MAX_SPEED * 1.02
+        return max(0.0, v) / top
+
+    def manual_power(self, v_long: float) -> float:
+        """Share of the engine's force the chosen gear delivers: nothing at the
+        limiter, a weak pull when lugging in a tall gear."""
+        r = self.revs_in(self.gear, v_long)
+        if r >= self.REV_LIMIT:
+            return 0.0
+        return 1.0 if r > 0.45 else 0.35 + 0.65 * r / 0.45
+
+    def shift(self, d: int) -> None:
+        g = min(self.GEARS, max(1, self.gear + d))
+        # a downshift that would over-rev the engine is refused
+        if d < 0 and self.revs_in(g, self.speed) > 1.15:
+            return
+        self.gear = g
+
     def step(self, ctl: Controls, dt: float, surface) -> None:
         # Not a copy: nothing modifies ``pos`` in place (every update below,
         # and in contact.py, assigns a new array), so the old one can be kept.
@@ -492,6 +520,8 @@ class Vehicle:
             else:
                 self.tc_cut = 0.0
             f_engine = min(f_engine, traction)
+            if self.manual:
+                f_engine *= self.manual_power(v_long)
             f_engine *= ctl.throttle
         elif v_long > -6.0 and ctl.brake > 0.0 and v_long < 0.5:
             f_engine = -cfg.REVERSE_FORCE * ctl.brake   # reverse
@@ -620,8 +650,23 @@ class Vehicle:
         # clipped on the way past a barrier has to spin the car; a square hit
         # into the same barrier must not. The difference is entirely in the
         # arm, so both fall out of one calculation.
+        guarded = False
+        if self.edge_guard:
+            lim = surface.resolve_limits(self.pos, self.yaw)
+            if lim is not None:
+                # All four wheels beyond the line: back onto it, the speed into
+                # it gone and some of what runs along it -- no bounce, no spin.
+                guarded = True
+                self.pos, gn = lim
+                vn = float(self.vel[0] * gn[0] + self.vel[1] * gn[1])
+                if vn < 0.0:
+                    self.vel = self.vel - vn * gn
+                    tang = np.array((-gn[1], gn[0]))
+                    vt = float(self.vel[0] * tang[0] + self.vel[1] * tang[1])
+                    cut = min(abs(vt), cfg.EDGE_GUARD_FRICTION * -vn)
+                    self.vel = self.vel - math.copysign(cut, vt) * tang
         corrected, wn, arm = surface.resolve_body(self.pos, self.yaw)
-        self.hit_wall = corrected is not None
+        self.hit_wall = guarded or corrected is not None
         if corrected is not None:
             self.pos = corrected
             # How the contact point moves per unit of yaw rate: d(arm)/d(yaw)

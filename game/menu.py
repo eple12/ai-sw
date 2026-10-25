@@ -288,6 +288,8 @@ class ModeMenu:
         elif self.row == 2 and key in ("right arrow", "d", "left arrow", "a"):
             self.btn = 1 - self.btn
             self._refresh()
+        elif self.row == 2 and key in ("enter", "space"):
+            self.on_settings()
         elif key in ("right arrow", "d", "left arrow", "a",
                      "right arrow hold", "d hold", "left arrow hold", "a hold"):
             step = 1 if key.startswith(("right", "d")) else -1

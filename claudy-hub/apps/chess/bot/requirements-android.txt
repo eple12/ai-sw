@@ -1,0 +1,5 @@
+# Termux: pure-Python packages only (the Caliente boards are drawn by the browser, so no Pillow/resvg)
+textual>=1.0
+chess>=1.10
+httpx>=0.27
+PyYAML>=6.0

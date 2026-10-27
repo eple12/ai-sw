@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+apps/chess/bot/config.yml
+apps/chess/bot/token.txt
+apps/chess/bot/logs/
+apps/chess/bot/games/

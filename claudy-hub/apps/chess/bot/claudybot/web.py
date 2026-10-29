@@ -34,6 +34,7 @@ import chess
 from rich.text import Text
 
 from .commands import UI, Commands
+from .engine import EngineError, UciEngine
 from .game import MATE_CP, GameSession, fmt_score, score_cp, win_percent
 from .render import pv_san, search_board
 
@@ -206,6 +207,7 @@ class WebServer:
     def __init__(self, mgr: "BotManager", host: str = "127.0.0.1", port: int = 8080, key: str = "",
                  public_port: int = 0):
         self.mgr = mgr
+        self._hint_lock = asyncio.Lock()
         self.public_port = public_port   # extra listener that serves nothing but /api/public/state (for a tunnel)
         self.pub_server: asyncio.base_events.Server | None = None
         self.host = host
@@ -364,6 +366,12 @@ class WebServer:
                 return 400, "text/plain", b"bad json", False
             return self._json(await self.command(str(req.get("line", ""))[:2000], req.get("watched"),
                                                  req.get("view")))
+        if path == "/api/hint" and method == "POST":
+            try:
+                req = json.loads(body or b"{}")
+            except ValueError:
+                return 400, "text/plain", b"bad json", False
+            return self._json(await self.hint(str(req.get("id", ""))))
         if path == "/api/analysis":
             an = self.mgr.get_analysis()
             if method == "GET":
@@ -478,6 +486,27 @@ class WebServer:
         for k in ("bot", "human"):
             out[k] = [use[k], m.slot_cap(k)]
         return out
+
+    async def hint(self, gid: str) -> dict:
+        """Best move for the person to move in a local game: a separate engine at full strength, ~2 s."""
+        g = self.mgr.games.get(gid)
+        if g is None or not g.local or g.over or not g.human_turn:
+            return {"error": "no hint now"}
+        async with self._hint_lock:
+            ecfg = self.mgr.cfg.get("engine")
+            opts = {k: v for k, v in dict(ecfg["options"]).items() if k.lower() in ("threads", "hash", "syzygypath")}
+            opts["Threads"] = min(int(opts.get("Threads", 2) or 2), 4)
+            opts["Ponder"] = False
+            eng = UciEngine(self.mgr.cfg.resolve(ecfg["path"]), opts)
+            try:
+                await eng.start()
+                await eng.go(f"position fen {g.ref.board.fen()}", "go movetime 2000", None)
+                best, _ = await eng.wait_bestmove(15)
+            except (EngineError, asyncio.TimeoutError):
+                return {"error": "engine failed"}
+            finally:
+                await eng.quit()
+        return {"move": best} if best and best != "(none)" else {"error": "no move"}
 
     async def command(self, line: str, watched: str | None, view: str | None = None) -> dict:
         ui = _RequestUI(watched, view)

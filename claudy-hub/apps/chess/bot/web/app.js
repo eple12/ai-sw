@@ -108,6 +108,7 @@ class Board {
       this.orient = orient;
       this.drawSquares();
       still = true;
+      if (this.arrow) this.setArrow(this.arrow);
     }
     const marks = `${last ? last.join("") : ""}|${check || ""}`;
     if (marks !== this.marks) {
@@ -210,6 +211,27 @@ class Board {
       }
     }
     this.select(sq !== this.sel && this.legal.some(m => m.startsWith(sq)) ? sq : null);
+  }
+  // ---- hint arrow (uci move, or null to clear) ----
+  setArrow(uci) {
+    this.arrow = uci || null;
+    if (this.arrowEl) { this.arrowEl.remove(); this.arrowEl = null; }
+    if (!uci) return;
+    const [x1, y1] = this.xy(uci.slice(0, 2)), [x2, y2] = this.xy(uci.slice(2, 4));
+    const ns = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(ns, "svg");
+    svg.setAttribute("viewBox", "0 0 8 8");
+    svg.setAttribute("class", "hint-arrow");
+    const dx = x2 - x1, dy = y2 - y1, len = Math.hypot(dx, dy) || 1, ux = dx / len, uy = dy / len;
+    const sx = x1 + .5 + ux * .25, sy = y1 + .5 + uy * .25, ex = x2 + .5 - ux * .35, ey = y2 + .5 - uy * .35;
+    const nx = -uy, ny = ux;
+    const line = document.createElementNS(ns, "line");
+    for (const [k, v] of [["x1", sx], ["y1", sy], ["x2", ex - ux * .2], ["y2", ey - uy * .2], ["stroke-width", .16], ["stroke-linecap", "round"]]) line.setAttribute(k, v);
+    const head = document.createElementNS(ns, "polygon");
+    head.setAttribute("points", `${ex},${ey} ${ex - ux * .38 + nx * .26},${ey - uy * .38 + ny * .26} ${ex - ux * .38 - nx * .26},${ey - uy * .38 - ny * .26}`);
+    svg.append(line, head);
+    this.root.appendChild(svg);
+    this.arrowEl = svg;
   }
   setBanner(text) {
     if (!text) { if (this.banner) { this.banner.remove(); this.banner = null; } return; }
@@ -672,6 +694,20 @@ $("#d-flip").onclick = () => {
   store.set("claudy-flip", S.flip);
   if (S.detail) renderDetail(S.detail, false);
 };
+$("#d-hint").onclick = async () => {
+  if (!S.watched || !S.detail) return;
+  const btn = $("#d-hint"), id = S.watched, ply = S.detail.ply;
+  S.hinting = true;
+  btn.disabled = true;
+  setText(btn, "Thinking…");
+  try {
+    const r = await api("/api/hint", { id });
+    if (r.move && S.watched === id && S.detail && S.detail.ply === ply) { S.hintPly = ply; dBoard.setArrow(r.move); }
+  } catch (e) { /* no hint */ }
+  S.hinting = false;
+  setText(btn, "Hint");
+  if (S.detail) renderDetail(S.detail, false);
+};
 $("#d-draw").onclick = () => runCommand(`draw ${S.watched}`);
 $("#d-takeback").onclick = () => runCommand(`takeback ${S.watched}`);
 $("#d-peek").onclick = () => { store.set("claudy-peek", !store.get("claudy-peek", false)); if (S.detail) renderDetail(S.detail, false); };
@@ -717,6 +753,9 @@ function renderDetail(g, animate = true) {
   if (g.url && link.href !== g.url) link.href = g.url;
   for (const id of ["#d-draw", "#d-abort", "#d-resign", "#d-takeback"]) $(id).disabled = g.over;
   $("#d-takeback").hidden = !g.local;
+  $("#d-hint").hidden = !g.local;
+  $("#d-hint").disabled = g.over || g.my_turn || !!S.hinting;
+  if (S.hintPly !== g.ply || g.over) { S.hintPly = g.ply; dBoard.setArrow(null); }
   const nopeek = g.local && !g.over && !store.get("claudy-peek", false);
   setClass($("#detail"), "local", g.local);
   setClass($("#detail"), "nopeek", nopeek);

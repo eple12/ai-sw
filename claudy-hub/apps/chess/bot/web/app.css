@@ -353,7 +353,7 @@ button.primary { border-color: var(--green); background: var(--green-bg); color:
 }
 .sq.dest.occ::before {
   width: 100%; height: 100%; border-radius: 0; left: 0; top: 0; transform: none;
-  background: radial-gradient(transparent 0%, transparent 72%, rgba(20, 85, 30, .6) 74%);
+  background: radial-gradient(circle closest-side, transparent 68%, rgba(205, 55, 35, .8) 70%);
 }
 #promo { position: fixed; inset: 0; background: rgba(0, 0, 0, .55); display: flex; align-items: center; justify-content: center; z-index: 30; }
 #promo[hidden] { display: none; }
@@ -394,3 +394,7 @@ button.primary { border-color: var(--green); background: var(--green-bg); color:
   #analysis { grid-template-columns: minmax(0, 1fr); --bsize: 100%; }
   #a-left { max-width: min(100%, calc(100dvh - var(--header-h) - var(--cmd-h) - 260px + 24px)); margin: 0 auto; width: 100%; }
 }
+
+.hint-arrow { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 5; pointer-events: none; }
+.hint-arrow line { stroke: rgba(235, 150, 20, .85); }
+.hint-arrow polygon { fill: rgba(235, 150, 20, .85); }
